@@ -39,7 +39,7 @@ function errorHandler(error, req, res, next) {
 
     if (error.name?.includes('Mongo') || error.name?.includes('Mongoose')) {
         console.error('Database request failed:', error.name);
-        return res.status(503).json({ message: 'Database unavailable; product was not saved' });
+        return res.status(503).json({ message: 'Database unavailable; the request could not be completed' });
     }
 
     console.error('Request failed:', error.name);
