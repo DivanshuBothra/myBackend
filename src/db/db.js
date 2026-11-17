@@ -4,6 +4,29 @@ const productConnection = mongoose.createConnection();
 const connectionOptions = { serverSelectionTimeoutMS: 8000 };
 let connectionPromise;
 
+function connectUserDatabase(uri) {
+    if (mongoose.connection.readyState === 1) {
+        return Promise.resolve();
+    }
+    if (mongoose.connection.readyState === 2) {
+        return mongoose.connection.asPromise();
+    }
+    return mongoose.connect(uri, connectionOptions);
+}
+
+function connectProductDatabase(uri) {
+    if (productConnection.readyState === 1) {
+        return Promise.resolve();
+    }
+    if (productConnection.readyState === 2) {
+        return productConnection.asPromise();
+    }
+    return productConnection.openUri(uri, {
+        ...connectionOptions,
+        dbName: 'product'
+    }).asPromise();
+}
+
 // Keep users on the URI's database and products in a separate database on the same cluster.
 async function connectDB() {
     const uri = process.env.MONGO_URI?.trim();
@@ -24,15 +47,8 @@ async function connectDB() {
     }
 
     const pendingConnection = Promise.all([
-        mongoose.connection.readyState === 2
-            ? mongoose.connection.asPromise()
-            : mongoose.connect(uri, connectionOptions),
-        productConnection.readyState === 2
-            ? productConnection.asPromise()
-            : productConnection.openUri(uri, {
-                ...connectionOptions,
-                dbName: 'product'
-            }).asPromise()
+        connectUserDatabase(uri),
+        connectProductDatabase(uri)
     ]).then(() => {
         console.log('Connected to MongoDB user and product databases');
     });
