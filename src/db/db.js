@@ -10,7 +10,7 @@ async function connectDB() {
 
         await productConnection.openUri(process.env.MONGO_URI, {
             dbName: 'product'
-        });
+        }).asPromise();
         console.log('Connected to MongoDB product database');
     }
     catch (error) {
