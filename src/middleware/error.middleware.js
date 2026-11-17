@@ -1,3 +1,5 @@
+const { databaseErrorDetails } = require('../db/db');
+
 // Translate upload, validation, database, and unexpected failures into HTTP responses.
 function errorHandler(error, req, res, next) {
     if (res.headersSent) {
@@ -37,8 +39,12 @@ function errorHandler(error, req, res, next) {
         });
     }
 
-    if (error.name?.includes('Mongo') || error.name?.includes('Mongoose')) {
-        console.error('Database request failed:', error.name);
+    if (
+        error.name?.includes('Mongo') ||
+        error.name?.includes('Mongoose') ||
+        error.name === 'DatabaseConfigurationError'
+    ) {
+        console.error('Database request failed:', databaseErrorDetails(error));
         return res.status(503).json({ message: 'Database unavailable; the request could not be completed' });
     }
 

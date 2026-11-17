@@ -5,14 +5,21 @@ const productRoutes = require('./routes/product.routes');
 const errorHandler = require('./middleware/error.middleware');
 const { connectDB } = require('./db/db');
 
-// Establish the database connection when this module loads.
-// vercel.json routes all requests directly to this file (not through server.js),
-// so connectDB() must be called here — server.js is not executed on Vercel.
-connectDB().catch((err) => console.error('Database connection failed on startup:', err.name));
-
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
+
+// vercel.json sends requests directly to this module, so wait for MongoDB
+// before any API controller reads or writes data.
+app.use('/api', async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
+
 // Mount the authentication and product APIs under their respective prefixes.
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
@@ -21,4 +28,5 @@ app.use(errorHandler);
 app.get('/', (req, res) => {
     res.send('Backend is running successfully!');
 });
+
 module.exports = app;
