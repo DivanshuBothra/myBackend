@@ -2,13 +2,15 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-// Register a regular user; account roles are assigned by the server, not by request data.
+// Register an account. An omitted or unrecognized role defaults to a regular user.
 async function registerUser(req, res) {
-    const { username, phonenum, password } = req.body;
-    const role = req.body?.role || 'user';
+    const { username, phonenum, password, role: requestedRole } = req.body;
+    const role = typeof requestedRole === 'string' && requestedRole.trim().toLowerCase() === 'admin'
+        ? 'admin'
+        : 'user';
     const existingUser = await userModel.findOne({
         phonenum
-    }); 
+    });
 
     if (existingUser) {
         return res.status(400).json({ message: 'User already exists' });
@@ -23,7 +25,6 @@ async function registerUser(req, res) {
         role
     });
 
-    // The User schema defaults new accounts to "user", so clients cannot self-assign admin.
     const token = jwt.sign({
         id: user._id,
         phonenum: user.phonenum,
