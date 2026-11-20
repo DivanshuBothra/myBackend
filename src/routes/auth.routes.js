@@ -5,7 +5,7 @@ const authController = require('../controllers/auth.controller');
 const router = express.Router();
 const parseFormFields = multer().none();
 
-// Register an account; role defaults to "user" unless the request specifies "admin".
+// Register an account; accept "admin" or "user", defaulting to "user".
 router.post('/register', parseFormFields, authController.registerUser);
 // Verify an account's credentials and issue its authentication cookie.
 router.post('/login', parseFormFields, authController.loginUser);

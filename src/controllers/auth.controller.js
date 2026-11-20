@@ -2,13 +2,13 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-// Register a user, defaulting to "user" unless the request explicitly asks for "admin".
+// Register using the requested role; an omitted or blank role defaults to "user".
 async function registerUser(req, res) {
     const { username, phonenum, password, role: requestedRole } = req.body;
-    const role = typeof requestedRole === 'string' && requestedRole.trim().toLowerCase() === 'admin'
-        ? 'admin'
-        : 'user';
-
+    const normalizedRole = typeof requestedRole === 'string'
+        ? requestedRole.trim().toLowerCase()
+        : '';
+    const role = normalizedRole === 'admin' ? 'admin' : 'user';
     const existingUser = await userModel.findOne({
         phonenum
     });
