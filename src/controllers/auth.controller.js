@@ -20,7 +20,7 @@ async function registerUser(req, res) {
         username,
         phonenum,
         password: hash,
-        role
+        role: requestedRole
     });
 
     // The User schema defaults new accounts to "user", so clients cannot self-assign admin.
