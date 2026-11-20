@@ -4,7 +4,8 @@ const bcrypt = require('bcryptjs');
 
 // Register a regular user; account roles are assigned by the server, not by request data.
 async function registerUser(req, res) {
-    const { username, phonenum, password, role } = req.body;
+    const { username, phonenum, password } = req.body;
+
     const existingUser = await userModel.findOne({
         phonenum
     });
@@ -18,8 +19,7 @@ async function registerUser(req, res) {
     const user = await userModel.create({
         username,
         phonenum,
-        password: hash,
-        role
+        password: hash
     });
 
     // The User schema defaults new accounts to "user", so clients cannot self-assign admin.
