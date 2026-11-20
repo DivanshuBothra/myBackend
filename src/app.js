@@ -7,6 +7,7 @@ const { connectDB } = require('./db/db');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // vercel.json sends requests directly to this module, so wait for MongoDB
