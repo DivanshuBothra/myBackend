@@ -4,7 +4,8 @@ const bcrypt = require('bcryptjs');
 
 // Register a regular user; account roles are assigned by the server, not by request data.
 async function registerUser(req, res) {
-    const { username, phonenum, password, role } = req.body;
+    const { username, phonenum, password } = req.body;
+    const role = req.body?.role || 'user';
     const existingUser = await userModel.findOne({
         phonenum
     });
