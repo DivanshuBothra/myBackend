@@ -20,12 +20,12 @@ function getRazorpayCredentials() {
 
 function getAddressSnapshot(address) {
     return {
-        fullName: address.fullName,
-        line1: address.line1,
-        line2: address.line2 || '',
-        city: address.city,
-        state: address.state,
-        pincode: address.pincode
+        fullName: typeof address.fullName === 'string' ? address.fullName.trim() : '',
+        line1: typeof address.line1 === 'string' ? address.line1.trim() : '',
+        line2: typeof address.line2 === 'string' ? address.line2.trim() : '',
+        city: typeof address.city === 'string' ? address.city.trim() : '',
+        state: typeof address.state === 'string' ? address.state.trim() : '',
+        pincode: typeof address.pincode === 'string' ? address.pincode.trim() : ''
     };
 }
 
@@ -37,6 +37,15 @@ async function loadOrderContext(req, res) {
     }
     if (!user.address) {
         res.status(409).json({ code: 'ADDRESS_REQUIRED', message: 'Add a delivery address before checkout.' });
+        return null;
+    }
+    const deliveryAddress = getAddressSnapshot(user.address);
+    if (!deliveryAddress.fullName || !deliveryAddress.line1 || !deliveryAddress.city ||
+        !deliveryAddress.state || deliveryAddress.fullName.length > 100 ||
+        deliveryAddress.line1.length > 150 || deliveryAddress.line2.length > 150 ||
+        deliveryAddress.city.length > 80 || deliveryAddress.state.length > 80 ||
+        !/^\d{6}$/.test(deliveryAddress.pincode)) {
+        res.status(409).json({ code: 'ADDRESS_REQUIRED', message: 'Update your delivery address before checkout.' });
         return null;
     }
 
@@ -72,27 +81,40 @@ async function loadOrderContext(req, res) {
     }
 
     const productsById = new Map(products.map((product) => [String(product._id), product]));
-    const items = Array.from(quantities, ([productId, quantity]) => {
+    const items = [];
+    for (const [productId, quantity] of quantities) {
         const product = productsById.get(productId);
-        const unitPricePaise = Math.round(Number(product.price) * 100);
-        return {
+        const title = [product.title, product.heading].find((value) => typeof value === 'string' && value.trim());
+        const heading = [product.heading, product.title].find((value) => typeof value === 'string' && value.trim());
+        const price = Number(product.price);
+        const unitPricePaise = Math.round(price * 100);
+        const lineTotalPaise = unitPricePaise * quantity;
+        if (!title || !heading || product.price === null || product.price === undefined ||
+            (typeof product.price === 'string' && !product.price.trim()) ||
+            !Number.isFinite(price) || price < 0 || !Number.isSafeInteger(unitPricePaise) ||
+            !Number.isSafeInteger(lineTotalPaise)) {
+            res.status(400).json({ message: 'One or more products in your cart have invalid catalogue data.' });
+            return null;
+        }
+
+        items.push({
             productId: product._id,
-            title: product.title,
-            heading: product.heading,
+            title: title.trim(),
+            heading: heading.trim(),
             url: product.url || '',
             uri: product.uri || '',
             unitPricePaise,
             quantity,
-            lineTotalPaise: unitPricePaise * quantity
-        };
-    });
+            lineTotalPaise
+        });
+    }
     const amountPaise = items.reduce((total, item) => total + item.lineTotalPaise, 0);
-    if (!Number.isSafeInteger(amountPaise) || items.some((item) => !Number.isSafeInteger(item.lineTotalPaise))) {
+    if (!Number.isSafeInteger(amountPaise)) {
         res.status(400).json({ message: 'The order total is invalid.' });
         return null;
     }
 
-    return { user, items, amountPaise };
+    return { user, items, amountPaise, deliveryAddress };
 }
 
 async function createCashOnDeliveryOrder(req, res, next) {
@@ -103,7 +125,7 @@ async function createCashOnDeliveryOrder(req, res, next) {
         const order = await OrderModel.create({
             userId: context.user._id,
             items: context.items,
-            deliveryAddress: getAddressSnapshot(context.user.address),
+            deliveryAddress: context.deliveryAddress,
             amountPaise: context.amountPaise,
             paymentMethod: 'cod',
             paymentStatus: 'pending',
@@ -159,7 +181,7 @@ async function createRazorpayOrder(req, res, next) {
         const order = await OrderModel.create({
             userId: context.user._id,
             items: context.items,
-            deliveryAddress: getAddressSnapshot(context.user.address),
+            deliveryAddress: context.deliveryAddress,
             amountPaise: context.amountPaise,
             paymentMethod: 'razorpay',
             paymentStatus: 'pending',

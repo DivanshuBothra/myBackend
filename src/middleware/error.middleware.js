@@ -15,6 +15,13 @@ function errorHandler(error, req, res, next) {
     }
 
     if (error.name === 'ValidationError' || error.name === 'CastError') {
+        if (req.originalUrl?.startsWith('/api/orders')) {
+            const invalidFields = error.name === 'ValidationError'
+                ? Object.keys(error.errors || {})
+                : [error.path].filter(Boolean);
+            console.error('Order validation failed:', error.name, invalidFields);
+            return res.status(400).json({ message: 'Order details are invalid. Refresh your cart and check the delivery address.' });
+        }
         return res.status(400).json({ message: 'Product details are invalid' });
     }
 
