@@ -5,6 +5,8 @@ const userSchema = new mongoose.Schema({
     username: {
         type: String,
         required: true,
+        maxlength: 16,
+        trim: true,
     },
     phonenum: {
         type: String,
