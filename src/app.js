@@ -2,6 +2,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const authRoutes = require('./routes/auth.routes');
 const productRoutes = require('./routes/product.routes');
+const ordersRoutes = require('./routes/orders.routes');
 const errorHandler = require('./middleware/error.middleware');
 const { connectDB } = require('./db/db');
 const cors = require('cors')
@@ -29,6 +30,7 @@ app.use('/api', async (req, res, next) => {
 // Mount the authentication and product APIs under their respective prefixes.
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/orders', ordersRoutes);
 app.use(errorHandler);
 
 app.get('/', (req, res) => { 
