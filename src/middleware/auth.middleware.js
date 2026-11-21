@@ -6,7 +6,7 @@ function requireAuthenticatedUser(req, res, next) {
         return res.status(401).json({ message: 'Please sign in to continue.' });
     }
 
-    let decoded;
+    let decoded; 
     try {
         decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch {
