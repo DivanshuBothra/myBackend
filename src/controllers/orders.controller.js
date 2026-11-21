@@ -3,10 +3,17 @@ const mongoose = require('mongoose');
 const ProductModel = require('../models/product.model');
 const UserModel = require('../models/user.model');
 const OrderModel = require('../models/order.model');
+const CancelledOrderModel = require('../models/cancelled-order.model');
+const {
+    MAX_CONSECUTIVE_ORDER_CANCELLATIONS,
+    MAX_ORDER_CANCELLATION_SCORE,
+    getNextCancellationScore,
+    addOneCalendarMonth
+} = require('../account-ban');
 
 const MAX_CART_QUANTITY = 25;
 const ORDER_CANCELLATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
-const PURCHASED_ORDER_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'];
+const PURCHASED_ORDER_STATUSES = ['delivered'];
 
 function getRazorpayCredentials() {
     const keyId = process.env.RAZORPAY_KEY_ID?.trim();
@@ -36,8 +43,8 @@ function generateOrderNumber() {
     return `BSH-${date}-${randomBytes(8).toString('hex').toUpperCase()}`;
 }
 
-async function calculatePurchasedProductCount(userId) {
-    const [result] = await OrderModel.aggregate([
+async function calculatePurchasedProductCount(userId, session) {
+    let aggregation = OrderModel.aggregate([
         {
             $match: {
                 userId: new mongoose.Types.ObjectId(String(userId)),
@@ -47,18 +54,37 @@ async function calculatePurchasedProductCount(userId) {
         { $unwind: '$items' },
         { $group: { _id: null, count: { $sum: '$items.quantity' } } }
     ]);
+    if (session) aggregation = aggregation.session(session);
+    const [result] = await aggregation;
     return result?.count || 0;
 }
 
-async function refreshPurchasedProductCount(userId) {
-    try {
-        const productsPurchased = await calculatePurchasedProductCount(userId);
-        await UserModel.updateOne({ _id: userId }, { $set: { productsPurchased } });
-        return productsPurchased;
-    } catch (error) {
-        console.error('Could not refresh the user purchase count:', error.name);
-        return null;
-    }
+async function calculateCancellationScore(userId, currentScore, resetAt, session) {
+    const lastDeliveredOrder = await OrderModel.findOne({ userId, status: 'delivered' })
+        .sort({ updatedAt: -1 })
+        .select('statusHistory createdAt updatedAt')
+        .session(session);
+    const deliveryEvent = lastDeliveredOrder?.statusHistory
+        ?.filter((entry) => entry.status === 'delivered')
+        .sort((left, right) => right.changedAt - left.changedAt)[0];
+    const lastDeliveredAt = deliveryEvent?.changedAt ||
+        lastDeliveredOrder?.updatedAt ||
+        lastDeliveredOrder?.createdAt ||
+        new Date(0);
+    const resetDate = resetAt ? new Date(resetAt) : new Date(0);
+    const historyStart = resetDate > lastDeliveredAt ? resetDate : lastDeliveredAt;
+    const cancellationsSinceLastDelivery = {
+        userId,
+        status: 'cancelled',
+        cancelledAt: { $gt: historyStart }
+    };
+    const legacyCount = await OrderModel.countDocuments(cancellationsSinceLastDelivery).session(session);
+    const separateCount = await CancelledOrderModel.countDocuments(cancellationsSinceLastDelivery).session(session);
+    const historicalScore = -Math.min(
+        MAX_CONSECUTIVE_ORDER_CANCELLATIONS,
+        legacyCount + separateCount
+    );
+    return Math.min(Number.isFinite(currentScore) ? currentScore : 0, historicalScore);
 }
 
 function getPaymentInstrument(payment) {
@@ -180,8 +206,6 @@ async function createCashOnDeliveryOrder(req, res, next) {
             status: 'confirmed',
             statusHistory: [{ status: 'confirmed', changedAt: new Date() }]
         });
-        await refreshPurchasedProductCount(context.user._id);
-
         return res.status(201).json({ order });
     } catch (error) {
         return next(error);
@@ -328,7 +352,6 @@ async function verifyRazorpayPayment(req, res, next) {
             { new: true, runValidators: true }
         );
         if (updatedOrder) {
-            await refreshPurchasedProductCount(order.userId);
             return res.status(200).json({ order: updatedOrder });
         }
 
@@ -344,11 +367,18 @@ async function verifyRazorpayPayment(req, res, next) {
 
 async function getMyOrders(req, res, next) {
     try {
-        const orders = await OrderModel.find({ userId: req.authUserId }).sort({ createdAt: -1 }).limit(50);
-        const productsPurchased = await calculatePurchasedProductCount(req.authUserId);
-        UserModel.updateOne({ _id: req.authUserId }, { $set: { productsPurchased } })
-            .catch((error) => console.error('Could not refresh the user purchase count:', error.name));
-        return res.status(200).json({ orders, productsPurchased });
+        const [orders, separateCancelledOrders, legacyCancelledOrders, productsPurchased] = await Promise.all([
+            OrderModel.find({ userId: req.authUserId, status: { $ne: 'cancelled' } })
+                .sort({ createdAt: -1 }).limit(50),
+            CancelledOrderModel.find({ userId: req.authUserId }).sort({ createdAt: -1 }).limit(50),
+            OrderModel.find({ userId: req.authUserId, status: 'cancelled' }).sort({ createdAt: -1 }).limit(50),
+            calculatePurchasedProductCount(req.authUserId)
+        ]);
+        const cancelledOrders = [...separateCancelledOrders, ...legacyCancelledOrders]
+            .sort((left, right) => right.createdAt - left.createdAt)
+            .slice(0, 50);
+        await UserModel.updateOne({ _id: req.authUserId }, { $set: { productsPurchased } });
+        return res.status(200).json({ orders, cancelledOrders, productsPurchased });
     } catch (error) {
         return next(error);
     }
@@ -361,8 +391,15 @@ async function getAdminOrders(req, res, next) {
             return res.status(403).json({ message: 'Admin access required.' });
         }
 
-        const orders = await OrderModel.find().sort({ createdAt: -1 }).limit(100);
-        return res.status(200).json({ orders });
+        const [orders, separateCancelledOrders, legacyCancelledOrders] = await Promise.all([
+            OrderModel.find({ status: { $ne: 'cancelled' } }).sort({ createdAt: -1 }).limit(100),
+            CancelledOrderModel.find().sort({ createdAt: -1 }).limit(100),
+            OrderModel.find({ status: 'cancelled' }).sort({ createdAt: -1 }).limit(100)
+        ]);
+        const cancelledOrders = [...separateCancelledOrders, ...legacyCancelledOrders]
+            .sort((left, right) => right.createdAt - left.createdAt)
+            .slice(0, 100);
+        return res.status(200).json({ orders, cancelledOrders });
     } catch (error) {
         return next(error);
     }
@@ -373,41 +410,99 @@ async function cancelMyOrder(req, res, next) {
         return res.status(400).json({ message: 'Invalid order ID.' });
     }
 
+    let session;
     try {
-        const order = await OrderModel.findOne({ _id: req.params.orderId, userId: req.authUserId });
-        if (!order) return res.status(404).json({ message: 'Order not found.' });
-        if (order.status === 'cancelled') return res.status(200).json({ order });
+        session = await mongoose.startSession();
+        let outcome;
+        await session.withTransaction(async () => {
+            const order = await OrderModel.findOne({
+                _id: req.params.orderId,
+                userId: req.authUserId
+            }).session(session);
 
-        const cancellationCutoff = new Date(Date.now() - ORDER_CANCELLATION_WINDOW_MS);
-        const cancellableStatuses = ['pending_payment', 'confirmed', 'processing'];
-        if (!cancellableStatuses.includes(order.status) || order.createdAt < cancellationCutoff) {
-            return res.status(409).json({ message: 'Orders can only be cancelled within 2 days and before shipment.' });
-        }
+            if (!order) {
+                const previouslyCancelled = await CancelledOrderModel.findOne({
+                    _id: req.params.orderId,
+                    userId: req.authUserId
+                }).session(session);
+                outcome = previouslyCancelled
+                    ? { status: 200, body: { order: previouslyCancelled } }
+                    : { status: 404, body: { message: 'Order not found.' } };
+                return;
+            }
+            if (order.status === 'cancelled') {
+                outcome = { status: 200, body: { order } };
+                return;
+            }
 
-        const changedAt = new Date();
-        const refundStatus = order.paymentStatus === 'paid' ? 'pending' : 'not_required';
-        const cancelledOrder = await OrderModel.findOneAndUpdate(
-            {
+            const cancellationCutoff = new Date(Date.now() - ORDER_CANCELLATION_WINDOW_MS);
+            const cancellableStatuses = ['pending_payment', 'confirmed', 'processing'];
+            if (!cancellableStatuses.includes(order.status) || order.createdAt < cancellationCutoff) {
+                outcome = {
+                    status: 409,
+                    body: { message: 'Orders can only be cancelled within 2 days and before shipment.' }
+                };
+                return;
+            }
+
+            const user = await UserModel.findById(order.userId).session(session);
+            if (!user) {
+                outcome = { status: 401, body: { message: 'Please sign in to continue.' } };
+                return;
+            }
+
+            const currentScore = await calculateCancellationScore(
+                user._id,
+                user.orderCancellationScore,
+                user.orderCancellationResetAt,
+                session
+            );
+            const changedAt = new Date();
+            const snapshot = order.toObject();
+            snapshot.status = 'cancelled';
+            snapshot.cancelledAt = changedAt;
+            snapshot.refundStatus = order.paymentStatus === 'paid' ? 'pending' : 'not_required';
+            snapshot.statusHistory.push({ status: 'cancelled', changedAt });
+
+            const [cancelledOrder] = await CancelledOrderModel.create([snapshot], { session });
+            const deletion = await OrderModel.deleteOne({
                 _id: order._id,
                 userId: req.authUserId,
-                status: order.status,
-                paymentStatus: order.paymentStatus,
-                createdAt: { $gte: cancellationCutoff }
-            },
-            {
-                $set: { status: 'cancelled', cancelledAt: changedAt, refundStatus },
-                $push: { statusHistory: { status: 'cancelled', changedAt } }
-            },
-            { new: true, runValidators: true }
-        );
-        if (!cancelledOrder) {
-            return res.status(409).json({ message: 'The order changed while you were cancelling it. Refresh and try again.' });
-        }
+                status: order.status
+            }, { session });
+            if (deletion.deletedCount !== 1) {
+                throw new Error('Order changed while it was being cancelled.');
+            }
 
-        await refreshPurchasedProductCount(order.userId);
-        return res.status(200).json({ order: cancelledOrder });
+            user.orderCancellationScore = getNextCancellationScore(currentScore);
+            if (user.orderCancellationScore <= MAX_ORDER_CANCELLATION_SCORE) {
+                user.accountBannedUntil = addOneCalendarMonth(changedAt);
+            }
+            await user.save({ session });
+
+            outcome = {
+                status: 200,
+                body: {
+                    order: cancelledOrder,
+                    cancellationScore: user.orderCancellationScore,
+                    bannedUntil: user.accountBannedUntil
+                }
+            };
+        });
+
+        if (outcome.body.bannedUntil) {
+            res.clearCookie('token', {
+                httpOnly: true,
+                secure: true,
+                sameSite: 'none',
+                path: '/'
+            });
+        }
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
         return next(error);
+    } finally {
+        if (session) await session.endSession();
     }
 }
 
@@ -426,34 +521,70 @@ async function updateAdminOrderStatus(req, res, next) {
         return res.status(400).json({ message: 'Choose a valid next order status.' });
     }
 
+    let session;
     try {
         const user = await UserModel.findById(req.authUserId).select('role');
         if (!user || user.role !== 'admin') {
             return res.status(403).json({ message: 'Admin access required.' });
         }
 
-        const order = await OrderModel.findById(req.params.orderId);
-        if (!order) return res.status(404).json({ message: 'Order not found.' });
-        if (transitions[order.status] !== nextStatus) {
-            return res.status(409).json({ message: 'Order status can only move to the next tracking step.' });
-        }
+        session = await mongoose.startSession();
+        let outcome;
+        await session.withTransaction(async () => {
+            const order = await OrderModel.findById(req.params.orderId).session(session);
+            if (!order) {
+                outcome = { status: 404, body: { message: 'Order not found.' } };
+                return;
+            }
+            if (transitions[order.status] !== nextStatus) {
+                outcome = {
+                    status: 409,
+                    body: { message: 'Order status can only move to the next tracking step.' }
+                };
+                return;
+            }
 
-        const changedAt = new Date();
-        const updatedOrder = await OrderModel.findOneAndUpdate(
-            { _id: order._id, status: order.status },
-            {
-                $set: { status: nextStatus },
-                $push: { statusHistory: { status: nextStatus, changedAt } }
-            },
-            { new: true, runValidators: true }
-        );
-        if (!updatedOrder) {
-            return res.status(409).json({ message: 'The order status changed. Refresh and try again.' });
-        }
+            const changedAt = new Date();
+            const updatedOrder = await OrderModel.findOneAndUpdate(
+                { _id: order._id, status: order.status },
+                {
+                    $set: { status: nextStatus },
+                    $push: { statusHistory: { status: nextStatus, changedAt } }
+                },
+                { new: true, runValidators: true, session }
+            );
+            if (!updatedOrder) {
+                outcome = {
+                    status: 409,
+                    body: { message: 'The order status changed. Refresh and try again.' }
+                };
+                return;
+            }
 
-        return res.status(200).json({ order: updatedOrder });
+            if (nextStatus === 'delivered') {
+                const productsPurchased = await calculatePurchasedProductCount(order.userId, session);
+                await UserModel.updateOne(
+                    { _id: order.userId },
+                    {
+                        $set: {
+                            productsPurchased,
+                            orderCancellationScore: 0,
+                            accountBannedUntil: null,
+                            orderCancellationResetAt: changedAt
+                        }
+                    },
+                    { session }
+                );
+            }
+
+            outcome = { status: 200, body: { order: updatedOrder } };
+        });
+
+        return res.status(outcome.status).json(outcome.body);
     } catch (error) {
         return next(error);
+    } finally {
+        if (session) await session.endSession();
     }
 }
 
@@ -468,16 +599,25 @@ async function markRefundProcessed(req, res, next) {
             return res.status(403).json({ message: 'Admin access required.' });
         }
 
-        const order = await OrderModel.findOneAndUpdate(
+        const refundUpdate = {
+            $set: { refundStatus: 'processed', refundProcessedAt: new Date() }
+        };
+        const updateOptions = { new: true, runValidators: true };
+        const order = await CancelledOrderModel.findOneAndUpdate(
             {
                 _id: req.params.orderId,
                 status: 'cancelled',
                 paymentStatus: 'paid',
                 refundStatus: 'pending'
             },
-            { $set: { refundStatus: 'processed', refundProcessedAt: new Date() } },
-            { new: true, runValidators: true }
-        );
+            refundUpdate,
+            updateOptions
+        ) || await OrderModel.findOneAndUpdate({
+            _id: req.params.orderId,
+            status: 'cancelled',
+            paymentStatus: 'paid',
+            refundStatus: 'pending'
+        }, refundUpdate, updateOptions);
         if (!order) {
             return res.status(409).json({ message: 'This order does not have a pending prepaid refund.' });
         }
@@ -494,7 +634,8 @@ async function getOrderById(req, res, next) {
     }
 
     try {
-        const order = await OrderModel.findOne({ _id: req.params.orderId, userId: req.authUserId });
+        const order = await OrderModel.findOne({ _id: req.params.orderId, userId: req.authUserId }) ||
+            await CancelledOrderModel.findOne({ _id: req.params.orderId, userId: req.authUserId });
         if (!order) return res.status(404).json({ message: 'Order not found.' });
         return res.status(200).json({ order });
     } catch (error) {

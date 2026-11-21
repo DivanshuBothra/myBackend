@@ -1,6 +1,7 @@
 const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { getActiveAccountBan, getAccountBanMessage } = require('../account-ban');
 
 const FIXED_OTP = '123456';
 
@@ -117,6 +118,23 @@ async function loginUser(req, res) {
         return res.status(401).json({ message: 'Wrong OTP. Please try again.' });
     }
 
+    if (user.role === 'user') {
+        const bannedUntil = await getActiveAccountBan(user);
+        if (bannedUntil) {
+            res.clearCookie('token', {
+                httpOnly: true,
+                secure: true,
+                sameSite: 'none',
+                path: '/'
+            });
+            return res.status(403).json({
+                code: 'ACCOUNT_BANNED',
+                bannedUntil,
+                message: getAccountBanMessage(bannedUntil)
+            });
+        }
+    }
+
     issueAuthCookie(user, res);
 
     res.status(200).json({
@@ -130,6 +148,17 @@ async function verifyCredentials(req, res) {
     const user = await findUserWithValidCredentials(phonenum, password);
     if (!user) {
         return res.status(401).json({ message: 'Phone number or password is incorrect.' });
+    }
+
+    if (user.role === 'user') {
+        const bannedUntil = await getActiveAccountBan(user);
+        if (bannedUntil) {
+            return res.status(403).json({
+                code: 'ACCOUNT_BANNED',
+                bannedUntil,
+                message: getAccountBanMessage(bannedUntil)
+            });
+        }
     }
 
     return res.status(200).json({ message: 'Credentials verified.' });

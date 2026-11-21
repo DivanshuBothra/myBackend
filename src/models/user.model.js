@@ -36,6 +36,20 @@ const userSchema = new mongoose.Schema({
         min: 0,
         default: 0
     },
+    orderCancellationScore: {
+        type: Number,
+        min: -10,
+        max: 0,
+        default: 0
+    },
+    accountBannedUntil: {
+        type: Date,
+        default: null
+    },
+    orderCancellationResetAt: {
+        type: Date,
+        default: null
+    },
     address: {
         type: addressSchema,
         default: null
