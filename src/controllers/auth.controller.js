@@ -2,7 +2,7 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-const TEST_OTP = '123456';
+const FIXED_OTP = '123456';
 
 const cookieOptions = {
     httpOnly: true,
@@ -54,10 +54,7 @@ async function registerUser(req, res) {
 const { username, phonenum, password, otp } = req.body || {};
 const normalizedUsername = typeof username === 'string' ? username.trim() : '';
 
-if (process.env.NODE_ENV === 'production') {
-return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
-}
-if (otp !== TEST_OTP) {
+if (otp !== FIXED_OTP) {
 return res.status(401).json({ message: 'Wrong OTP. Please try again.' });
 }
 if (!normalizedUsername) {
@@ -116,11 +113,7 @@ async function loginUser(req, res) {
         return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    if (process.env.NODE_ENV === 'production') {
-        return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
-    }
-
-    if (otp !== TEST_OTP) {
+    if (otp !== FIXED_OTP) {
         return res.status(401).json({ message: 'Wrong OTP. Please try again.' });
     }
 
@@ -137,10 +130,6 @@ async function verifyCredentials(req, res) {
     const user = await findUserWithValidCredentials(phonenum, password);
     if (!user) {
         return res.status(401).json({ message: 'Phone number or password is incorrect.' });
-    }
-
-    if (process.env.NODE_ENV === 'production') {
-        return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
     }
 
     return res.status(200).json({ message: 'Credentials verified.' });
