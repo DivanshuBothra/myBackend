@@ -16,6 +16,9 @@ router.get('/mine', requireAuthenticatedUser, ordersController.getMyOrders);
 router.get('/admin', requireAuthenticatedUser, ordersController.getAdminOrders);
 router.post('/razorpay', requireAuthenticatedUser, orderActionLimiter, ordersController.createRazorpayOrder);
 router.post('/:orderId/verify-payment', requireAuthenticatedUser, orderActionLimiter, ordersController.verifyRazorpayPayment);
+router.post('/:orderId/cancel', requireAuthenticatedUser, orderActionLimiter, ordersController.cancelMyOrder);
+router.patch('/:orderId/status', requireAuthenticatedUser, orderActionLimiter, ordersController.updateAdminOrderStatus);
+router.patch('/:orderId/refund', requireAuthenticatedUser, orderActionLimiter, ordersController.markRefundProcessed);
 router.post('/', requireAuthenticatedUser, orderActionLimiter, ordersController.createCashOnDeliveryOrder);
 router.get('/:orderId', requireAuthenticatedUser, ordersController.getOrderById);
 

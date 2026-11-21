@@ -20,15 +20,35 @@ const deliveryAddressSchema = new mongoose.Schema({
     pincode: { type: String, required: true }
 }, { _id: false });
 
+const paymentInstrumentSchema = new mongoose.Schema({
+    method: { type: String, maxlength: 30 },
+    cardNetwork: { type: String, maxlength: 30 },
+    cardLast4: { type: String, match: /^\d{4}$/ },
+    bankName: { type: String, maxlength: 60 },
+    walletName: { type: String, maxlength: 60 }
+}, { _id: false });
+
+const orderStatusHistorySchema = new mongoose.Schema({
+    status: { type: String, enum: ['pending_payment', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'], required: true },
+    changedAt: { type: Date, required: true, default: Date.now }
+}, { _id: false });
+
 const orderSchema = new mongoose.Schema({
+    orderNumber: { type: String, required: true, unique: true, sparse: true, immutable: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     items: { type: [orderItemSchema], required: true },
     deliveryAddress: { type: deliveryAddressSchema, required: true },
     amountPaise: { type: Number, required: true, min: 0 },
     currency: { type: String, enum: ['INR'], default: 'INR' },
     paymentMethod: { type: String, enum: ['cod', 'razorpay'], required: true },
+    paymentTiming: { type: String, enum: ['prepaid', 'postpaid'], required: true },
+    paymentInstrument: { type: paymentInstrumentSchema, default: undefined },
     paymentStatus: { type: String, enum: ['pending', 'paid', 'failed'], required: true },
+    refundStatus: { type: String, enum: ['not_required', 'pending', 'processed'], default: 'not_required' },
     status: { type: String, enum: ['pending_payment', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'], required: true },
+    statusHistory: { type: [orderStatusHistorySchema], default: [] },
+    cancelledAt: { type: Date },
+    refundProcessedAt: { type: Date },
     receipt: { type: String, unique: true, sparse: true },
     razorpayOrderId: { type: String, unique: true, sparse: true },
     razorpayPaymentId: { type: String }

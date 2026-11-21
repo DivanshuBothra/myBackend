@@ -31,6 +31,11 @@ const userSchema = new mongoose.Schema({
         enum: ['user', 'admin'],
         default: 'user'
     },
+    productsPurchased: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
     address: {
         type: addressSchema,
         default: null

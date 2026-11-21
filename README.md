@@ -9,3 +9,12 @@ The browser location button also requires HTTPS (or localhost) and the user's pe
 Online checkout uses Razorpay. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`
 in `backend/.env`, keep automatic payment capture enabled in the Razorpay account,
 and use test keys until the checkout flow has been verified.
+
+Orders receive a unique server-generated order number and are stored with the
+user ID, item quantities, payment timing, amount, and status history. Admins
+advance delivery tracking from confirmed to processing, shipped, and delivered.
+Customers can cancel within 48 hours before shipment. Prepaid cancellations are
+marked refund-pending; process the refund in Razorpay before marking it processed
+in the admin Orders screen. Only safe payment metadata (method, card network,
+and last four digits) is stored; never store full card numbers, CVV, or bank
+credentials.
