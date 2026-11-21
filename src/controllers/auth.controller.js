@@ -2,7 +2,7 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-const TEST_LOGIN_OTP = '123456';
+const TEST_OTP = '123456';
 
 const cookieOptions = {
     httpOnly: true,
@@ -50,10 +50,16 @@ async function findUserWithValidCredentials(phonenum, password) {
 
 // Register a regular user; account roles are assigned by the server, not by request data.
 async function registerUser(req, res) {
-// Only take these three fields from the client. Role is never read from the request.
-const { username, phonenum, password } = req.body || {};
+// Only take these account fields from the client. Role is never read from the request.
+const { username, phonenum, password, otp } = req.body || {};
 const normalizedUsername = typeof username === 'string' ? username.trim() : '';
 
+if (process.env.NODE_ENV === 'production') {
+return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
+}
+if (otp !== TEST_OTP) {
+return res.status(401).json({ message: 'Wrong OTP. Please try again.' });
+}
 if (!normalizedUsername) {
 return res.status(400).json({ message: 'Username is required.' });
 }
@@ -114,7 +120,7 @@ async function loginUser(req, res) {
         return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
     }
 
-    if (otp !== TEST_LOGIN_OTP) {
+    if (otp !== TEST_OTP) {
         return res.status(401).json({ message: 'Wrong OTP. Please try again.' });
     }
 
