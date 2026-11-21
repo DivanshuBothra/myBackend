@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { productConnection } = require('../db/db');
 
-// Product documents store image details, product information, and popularity views; Mongo supplies _id.
+// Product documents store catalogue title, product heading/details, image, price, and popularity views.
 const productSchema = new mongoose.Schema({
     url:{
         type: String,
@@ -11,8 +11,13 @@ const productSchema = new mongoose.Schema({
     uri:{
         type: String,
     },
-    // Product name displayed to customers.
+    // Catalogue name used to group products.
     title:{
+        type: String,
+        required: true,
+    },
+    // Product name displayed on cards and the product detail page.
+    heading:{
         type: String,
         required: true,
     },

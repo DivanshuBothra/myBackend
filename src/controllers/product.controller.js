@@ -45,15 +45,16 @@ async function handleProductRequest(req, res, next) {
     }
 
     // Validate the text fields before uploading an image or writing to the database.
-    const { title, about, price: rawPrice } = req.body || {};
+    const { title, heading, about, price: rawPrice } = req.body || {};
     const price = Number(rawPrice);
     if (
         typeof title !== 'string' || !title.trim() ||
+        typeof heading !== 'string' || !heading.trim() ||
         typeof about !== 'string' || !about.trim() ||
         typeof rawPrice !== 'string' || !rawPrice.trim() ||
         !Number.isFinite(price) || price < 0
     ) {
-        return res.status(400).json({ message: 'Title, about, and a valid non-negative price are required' });
+        return res.status(400).json({ message: 'Catalogue title, product heading, about, and a valid non-negative price are required' });
     }
 
 
@@ -73,6 +74,7 @@ async function handleProductRequest(req, res, next) {
         const product = await ProductModel.create({
             url: uploadedImage.url,
             title: title.trim(),
+            heading: heading.trim(),
             about: about.trim(),
             price
         });
@@ -83,6 +85,7 @@ async function handleProductRequest(req, res, next) {
                 id: product._id,
                 url: product.url,
                 title: product.title,
+                heading: product.heading,
                 about: product.about,
                 price: product.price
             }
