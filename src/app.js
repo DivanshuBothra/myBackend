@@ -31,7 +31,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use(errorHandler);
 
-app.get('/', (req, res) => {
+app.get('/', (req, res) => { 
     res.send('Backend is running successfully!');
 });
 
