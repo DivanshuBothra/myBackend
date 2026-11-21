@@ -2,9 +2,15 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
+const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    path: '/'
+};
+
 // Register a regular user; account roles are assigned by the server, not by request data.
 async function registerUser(req, res) {
-    console.log("REGISTER HIT", req.body)
     const { username, phonenum, password, role } = req.body;
 
     const existingUser = await userModel.findOne({
@@ -31,7 +37,7 @@ async function registerUser(req, res) {
         role: user.role,
     }, process.env.JWT_SECRET);
 
-    res.cookie('token', token);
+    res.cookie('token', token, cookieOptions);
 
     res.status(201).json({
         message: 'User registered successfully',
@@ -65,7 +71,7 @@ async function loginUser(req, res) {
         role: user.role,
     }, process.env.JWT_SECRET);
 
-    res.cookie('token', token);
+    res.cookie('token', token, cookieOptions);
 
     res.status(200).json({
         message: 'User logged in successfully',
@@ -80,7 +86,7 @@ async function loginUser(req, res) {
 
 //logout
 async function logout(req, res) {
-    res.clearCookie("token")
+    res.clearCookie('token', cookieOptions);
     res.status(200).json({message: "User logout successfully"})
 }
 
