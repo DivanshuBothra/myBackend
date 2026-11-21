@@ -202,7 +202,7 @@ async function getAddress(req, res, next) {
         }
 
         return res.status(200).json({
-            profile: { id: user._id, username: user.username },
+            profile: { id: user._id, username: user.username, phonenum: user.phonenum },
             address: user.address || null
         });
     } catch (error) {
@@ -214,6 +214,7 @@ async function updateAddress(req, res, next) {
     const body = req.body || {};
     const address = {
         fullName: typeof body.fullName === 'string' ? body.fullName.trim() : '',
+        phone: typeof body.phone === 'string' ? body.phone.trim() : '',
         line1: typeof body.line1 === 'string' ? body.line1.trim() : '',
         line2: typeof body.line2 === 'string' ? body.line2.trim() : '',
         city: typeof body.city === 'string' ? body.city.trim() : '',
@@ -223,6 +224,7 @@ async function updateAddress(req, res, next) {
 
     if (
         !address.fullName || address.fullName.length > 100 ||
+        (address.phone && !/^\d{10}$/.test(address.phone)) ||
         !address.line1 || address.line1.length > 150 ||
         address.line2.length > 150 ||
         !address.city || address.city.length > 80 ||

@@ -31,6 +31,7 @@ function getRazorpayCredentials() {
 function getAddressSnapshot(address) {
     return {
         fullName: typeof address.fullName === 'string' ? address.fullName.trim() : '',
+        phone: typeof address.phone === 'string' ? address.phone.trim() : '',
         line1: typeof address.line1 === 'string' ? address.line1.trim() : '',
         line2: typeof address.line2 === 'string' ? address.line2.trim() : '',
         city: typeof address.city === 'string' ? address.city.trim() : '',
@@ -400,7 +401,28 @@ async function getAdminOrders(req, res, next) {
         const cancelledOrders = [...separateCancelledOrders, ...legacyCancelledOrders]
             .sort((left, right) => right.createdAt - left.createdAt)
             .slice(0, 100);
-        return res.status(200).json({ orders, cancelledOrders });
+        const userIds = new Set(
+            [...orders, ...cancelledOrders].map((order) => String(order.userId)).filter(Boolean)
+        );
+        const customers = await UserModel.find({ _id: { $in: [...userIds] } })
+            .select('_id username phonenum');
+        const customerById = new Map(customers.map((customer) => [String(customer._id), customer]));
+        const attachCustomer = (order) => {
+            const plain = typeof order.toObject === 'function' ? order.toObject() : { ...order };
+            const customer = customerById.get(String(order.userId));
+            plain.customer = customer ? {
+                username: customer.username,
+                phone: customer.phonenum
+            } : null;
+            if (!plain.deliveryAddress?.phone && plain.customer?.phone) {
+                plain.deliveryAddress = { ...plain.deliveryAddress, phone: plain.customer.phone };
+            }
+            return plain;
+        };
+        return res.status(200).json({
+            orders: orders.map(attachCustomer),
+            cancelledOrders: cancelledOrders.map(attachCustomer)
+        });
     } catch (error) {
         return next(error);
     }
@@ -558,6 +580,16 @@ async function updateAdminOrderStatus(req, res, next) {
             }
 
             if (nextStatus === 'delivered') {
+                for (const item of order.items) {
+                    const stockUpdate = await ProductModel.findOneAndUpdate(
+                        { _id: item.productId, stock: { $gte: item.quantity } },
+                        { $inc: { stock: -item.quantity, soldCount: item.quantity } },
+                        { new: true }
+                    );
+                    if (!stockUpdate) {
+                        throw new Error(`Insufficient stock for ${item.heading}.`);
+                    }
+                }
                 const productsPurchased = await calculatePurchasedProductCount(order.userId, session);
                 await UserModel.updateOne(
                     { _id: order.userId },

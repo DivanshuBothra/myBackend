@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const addressSchema = new mongoose.Schema({
     fullName: { type: String, required: true, trim: true, maxlength: 100 },
+    phone: { type: String, trim: true, match: /^\d{10}$/, default: '' },
     line1: { type: String, required: true, trim: true, maxlength: 150 },
     line2: { type: String, trim: true, maxlength: 150, default: '' },
     city: { type: String, required: true, trim: true, maxlength: 80 },

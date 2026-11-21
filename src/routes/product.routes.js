@@ -38,6 +38,7 @@ uploadLimiter,
 upload.single('image'),
 productController.handleProductRequest
 );
+router.get('/admin/inventory', productController.getInventorySales);
 
 // Count a product view, rate limited.
 router.post('/:productId/view', viewLimiter, productController.incrementProductView);

@@ -13,6 +13,7 @@ const orderItemSchema = new mongoose.Schema({
 
 const deliveryAddressSchema = new mongoose.Schema({
     fullName: { type: String, required: true },
+    phone: { type: String, default: '' },
     line1: { type: String, required: true },
     line2: { type: String, default: '' },
     city: { type: String, required: true },

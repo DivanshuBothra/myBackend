@@ -46,16 +46,21 @@ async function handleProductRequest(req, res, next) {
     }
 
     // Validate the text fields before uploading an image or writing to the database.
-    const { title, heading, about, price: rawPrice } = req.body || {};
+    const { title, heading, about, price: rawPrice, costPrice: rawCostPrice, stock: rawStock } = req.body || {};
     const price = Number(rawPrice);
+    const costPrice = rawCostPrice === undefined || rawCostPrice === '' ? 0 : Number(rawCostPrice);
+    const stock = Number(rawStock);
     if (
         typeof title !== 'string' || !title.trim() ||
         typeof heading !== 'string' || !heading.trim() ||
         typeof about !== 'string' || !about.trim() ||
         typeof rawPrice !== 'string' || !rawPrice.trim() ||
-        !Number.isFinite(price) || price < 0
+        !Number.isFinite(price) || price < 0 ||
+        !Number.isFinite(costPrice) || costPrice < 0 || costPrice > price ||
+        typeof rawStock !== 'string' || !rawStock.trim() ||
+        !Number.isInteger(stock) || stock < 0
     ) {
-        return res.status(400).json({ message: 'Catalogue title, product heading, about, and a valid non-negative price are required' });
+        return res.status(400).json({ message: 'Catalogue title, product heading, about, valid non-negative price, and initial stock are required' });
     }
 
 
@@ -77,7 +82,9 @@ async function handleProductRequest(req, res, next) {
             title: title.trim(),
             heading: heading.trim(),
             about: about.trim(),
-            price
+            price,
+            costPrice,
+            stock
         });
 
         return res.status(201).json({
@@ -88,7 +95,9 @@ async function handleProductRequest(req, res, next) {
                 title: product.title,
                 heading: product.heading,
                 about: product.about,
-                price: product.price
+                price: product.price,
+                stock: product.stock,
+                soldCount: product.soldCount
             }
         });
     } catch (error) {
@@ -101,6 +110,33 @@ async function handleProductRequest(req, res, next) {
             }
         }
 
+        return next(error);
+    }
+}
+
+async function getInventorySales(req, res, next) {
+    const token = req.cookies.token;
+    if (!token) return res.status(401).json({ message: 'Unauthorized' });
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.role !== 'admin') {
+            return res.status(403).json({ message: 'Admin access required' });
+        }
+        const products = await ProductModel.find().sort({ title: 1, heading: 1 });
+        return res.status(200).json({
+            products: products.map((product) => ({
+                id: product._id,
+                title: product.title,
+                heading: product.heading,
+                price: product.price,
+                stock: product.stock,
+                soldCount: product.soldCount
+            }))
+        });
+    } catch (error) {
+        if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
         return next(error);
     }
 }
@@ -162,6 +198,7 @@ async function incrementProductView(req, res, next) {
 
 module.exports = {
     handleProductRequest,
+    getInventorySales,
     getAllProducts,
     getProductById,
     incrementProductView

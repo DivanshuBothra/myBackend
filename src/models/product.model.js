@@ -31,7 +31,22 @@ const productSchema = new mongoose.Schema({
         type: Number,
         required: true,
     },
+    costPrice:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
     viewCount:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    stock:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    soldCount:{
         type: Number,
         default: 0,
         min: 0,
