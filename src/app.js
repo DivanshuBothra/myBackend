@@ -4,7 +4,9 @@ const authRoutes = require('./routes/auth.routes');
 const productRoutes = require('./routes/product.routes');
 const errorHandler = require('./middleware/error.middleware');
 const { connectDB } = require('./db/db');
+const cors = require('cors')
 
+app.use(cors({ origin: 'http://localhost:5173', credentials: true }))
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
