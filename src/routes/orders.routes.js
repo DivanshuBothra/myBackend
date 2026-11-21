@@ -12,14 +12,16 @@ const orderActionLimiter = rateLimit({
     message: { message: 'Too many checkout attempts. Please try again later.' }
 });
 
-router.get('/mine', requireAuthenticatedUser, ordersController.getMyOrders);
-router.get('/admin', requireAuthenticatedUser, ordersController.getAdminOrders);
-router.post('/razorpay', requireAuthenticatedUser, orderActionLimiter, ordersController.createRazorpayOrder);
-router.post('/:orderId/verify-payment', requireAuthenticatedUser, orderActionLimiter, ordersController.verifyRazorpayPayment);
-router.post('/:orderId/cancel', requireAuthenticatedUser, orderActionLimiter, ordersController.cancelMyOrder);
-router.patch('/:orderId/status', requireAuthenticatedUser, orderActionLimiter, ordersController.updateAdminOrderStatus);
-router.patch('/:orderId/refund', requireAuthenticatedUser, orderActionLimiter, ordersController.markRefundProcessed);
-router.post('/', requireAuthenticatedUser, orderActionLimiter, ordersController.createCashOnDeliveryOrder);
-router.get('/:orderId', requireAuthenticatedUser, ordersController.getOrderById);
+router.use(requireAuthenticatedUser);
+
+router.get('/mine', ordersController.getMyOrders);
+router.get('/admin', ordersController.getAdminOrders);
+router.post('/razorpay', orderActionLimiter, ordersController.createRazorpayOrder);
+router.post('/:orderId/verify-payment', orderActionLimiter, ordersController.verifyRazorpayPayment);
+router.post('/:orderId/cancel', orderActionLimiter, ordersController.cancelMyOrder);
+router.patch('/:orderId/status', orderActionLimiter, ordersController.updateAdminOrderStatus);
+router.patch('/:orderId/refund', orderActionLimiter, ordersController.markRefundProcessed);
+router.post('/', orderActionLimiter, ordersController.createCashOnDeliveryOrder);
+router.get('/:orderId', ordersController.getOrderById);
 
 module.exports = router;

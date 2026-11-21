@@ -2,15 +2,9 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { getActiveAccountBan, getAccountBanMessage } = require('../account-ban');
+const cookieOptions = require('../auth-cookie-options');
 
 const FIXED_OTP = '123456';
-
-const cookieOptions = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    path: '/'
-};
 
 function issueAuthCookie(user, res) {
     const token = jwt.sign({
@@ -20,9 +14,7 @@ function issueAuthCookie(user, res) {
     }, process.env.JWT_SECRET);
 
     res.cookie('token', token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
+        ...cookieOptions,
         maxAge: 7 * 24 * 60 * 60 * 1000
     });
 }
@@ -89,9 +81,7 @@ process.env.JWT_SECRET
 );
 
 res.cookie('token', token, {
-httpOnly: true,
-secure: true,
-sameSite: 'none',
+...cookieOptions,
 maxAge: 7 * 24 * 60 * 60 * 1000
 });
 
@@ -121,12 +111,7 @@ async function loginUser(req, res) {
     if (user.role === 'user') {
         const bannedUntil = await getActiveAccountBan(user);
         if (bannedUntil) {
-            res.clearCookie('token', {
-                httpOnly: true,
-                secure: true,
-                sameSite: 'none',
-                path: '/'
-            });
+            res.clearCookie('token', cookieOptions);
             return res.status(403).json({
                 code: 'ACCOUNT_BANNED',
                 bannedUntil,

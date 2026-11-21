@@ -4,6 +4,7 @@ const ProductModel = require('../models/product.model');
 const UserModel = require('../models/user.model');
 const OrderModel = require('../models/order.model');
 const CancelledOrderModel = require('../models/cancelled-order.model');
+const cookieOptions = require('../auth-cookie-options');
 const {
     MAX_CONSECUTIVE_ORDER_CANCELLATIONS,
     MAX_ORDER_CANCELLATION_SCORE,
@@ -491,12 +492,7 @@ async function cancelMyOrder(req, res, next) {
         });
 
         if (outcome.body.bannedUntil) {
-            res.clearCookie('token', {
-                httpOnly: true,
-                secure: true,
-                sameSite: 'none',
-                path: '/'
-            });
+            res.clearCookie('token', cookieOptions);
         }
         return res.status(outcome.status).json(outcome.body);
     } catch (error) {
