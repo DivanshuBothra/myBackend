@@ -8,7 +8,7 @@ function errorHandler(error, req, res, next) {
 
     if (error.name === 'MulterError') {
         if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(413).json({ message: 'Image must be 25 MB or smaller' });
+            return res.status(413).json({ message: 'Image must be 10 MB or smaller' });
         }
 
         return res.status(400).json({ message: 'Invalid upload. Send one file using the image field.' });

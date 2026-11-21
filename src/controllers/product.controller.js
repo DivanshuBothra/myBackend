@@ -16,6 +16,7 @@ async function handleProductRequest(req, res, next) {
             if (file.metadata?.contentType) {
                 res.type(file.metadata.contentType);
             }
+            res.set('Cache-Control', 'public, max-age=31536000, immutable');
             res.set('Content-Length', String(file.length));
 
             const stream = downloadImage(req.params.fileId);
