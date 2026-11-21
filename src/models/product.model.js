@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { productConnection } = require('../db/db');
 
-// Each Product document stores only the image URL and product details; Mongo supplies its _id.
+// Product documents store image details, product information, and popularity views; Mongo supplies _id.
 const productSchema = new mongoose.Schema({
     url:{
         type: String,
@@ -25,6 +25,11 @@ const productSchema = new mongoose.Schema({
     price:{
         type: Number,
         required: true,
+    },
+    viewCount:{
+        type: Number,
+        default: 0,
+        min: 0,
     }
 }, {
     versionKey: false,

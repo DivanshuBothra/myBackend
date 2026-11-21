@@ -13,6 +13,8 @@ router.get('/images/:fileId', productController.handleProductRequest);
 // Require the image and product fields as multipart form-data for new products.
 router.post('/upload', upload.single('image'), productController.handleProductRequest);
 
-router.get("/", productController.getAllProducts)
+router.post('/:productId/view', productController.incrementProductView);
+router.get('/', productController.getAllProducts);
+router.get('/:productId', productController.getProductById);
 
 module.exports = router;

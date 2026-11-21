@@ -9,6 +9,8 @@ const parseFormFields = multer().none();
 router.post('/register', parseFormFields, authController.registerUser);
 // Verify an account's credentials and issue its authentication cookie.
 router.post('/login', parseFormFields, authController.loginUser);
+// Verify credentials before displaying OTP; this route does not create a session.
+router.post('/verify-credentials', parseFormFields, authController.verifyCredentials);
 // Admin direct login is available only to accounts with the stored admin role.
 router.post('/admin-login', parseFormFields, authController.adminLoginUser);
 router.get('/admin-session', authController.getAdminSession);

@@ -1,4 +1,5 @@
 const ProductModel = require('../models/product.model');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const { uploadImage, findImage, downloadImage, deleteImage } = require('../services/storage.service');
 
@@ -100,15 +101,64 @@ async function handleProductRequest(req, res, next) {
     }
 }
 
-async function getAllProducts(req, res) {
-    const products = await ProductModel.find()
-    res.status(200).json({
-        message: "Products fetched Sucesfull",
-        products: products
-    })
+async function getAllProducts(req, res, next) {
+    try {
+        let productsQuery = ProductModel.find();
+        if (req.query.sort === 'popular') {
+            productsQuery = productsQuery.sort({ viewCount: -1, _id: -1 });
+        }
+
+        const products = await productsQuery;
+        return res.status(200).json({
+            message: "Products fetched Sucesfull",
+            products
+        });
+    } catch (error) {
+        return next(error);
+    }
+}
+
+async function getProductById(req, res, next) {
+    if (!mongoose.isValidObjectId(req.params.productId)) {
+        return res.status(400).json({ message: 'Invalid product ID' });
+    }
+
+    try {
+        const product = await ProductModel.findById(req.params.productId);
+        if (!product) {
+            return res.status(404).json({ message: 'Product not found' });
+        }
+
+        return res.status(200).json({ product });
+    } catch (error) {
+        return next(error);
+    }
+}
+
+async function incrementProductView(req, res, next) {
+    if (!mongoose.isValidObjectId(req.params.productId)) {
+        return res.status(400).json({ message: 'Invalid product ID' });
+    }
+
+    try {
+        const product = await ProductModel.findByIdAndUpdate(
+            req.params.productId,
+            { $inc: { viewCount: 1 } },
+            { new: true }
+        );
+        if (!product) {
+            return res.status(404).json({ message: 'Product not found' });
+        }
+
+        return res.status(200).json({ viewCount: product.viewCount });
+    } catch (error) {
+        return next(error);
+    }
 }
 
 module.exports = {
     handleProductRequest,
-    getAllProducts
+    getAllProducts,
+    getProductById,
+    incrementProductView
 };

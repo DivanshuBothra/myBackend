@@ -2,6 +2,8 @@ const userModel = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
+const TEST_LOGIN_OTP = '123456';
+
 const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -102,10 +104,18 @@ role: user.role
 
 // Verify credentials, then issue a cookie containing the account's stored role.
 async function loginUser(req, res) {
-    const { phonenum, password } = req.body || {};
+    const { phonenum, password, otp } = req.body || {};
     const user = await findUserWithValidCredentials(phonenum, password);
     if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
+    }
+
+    if (otp !== TEST_LOGIN_OTP) {
+        return res.status(401).json({ message: 'Wrong OTP. Please try again.' });
     }
 
     issueAuthCookie(user, res);
@@ -114,6 +124,20 @@ async function loginUser(req, res) {
         message: 'User logged in successfully',
         user: toPublicUser(user)
     });
+}
+
+async function verifyCredentials(req, res) {
+    const { phonenum, password } = req.body || {};
+    const user = await findUserWithValidCredentials(phonenum, password);
+    if (!user) {
+        return res.status(401).json({ message: 'Phone number or password is incorrect.' });
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ message: 'SMS OTP is not configured. Please try again later.' });
+    }
+
+    return res.status(200).json({ message: 'Credentials verified.' });
 }
 
 async function adminLoginUser(req, res) {
@@ -161,4 +185,4 @@ async function logout(req, res) {
     res.status(200).json({message: "User logout successfully"})
 }
 
-module.exports = {registerUser, loginUser, adminLoginUser, getAdminSession, logout};
+module.exports = {registerUser, loginUser, verifyCredentials, adminLoginUser, getAdminSession, logout};
