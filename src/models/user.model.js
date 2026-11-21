@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-// Store login fields and the server-controlled role used by product authorization.
+// Store login fields and the normalized role used by product authorization.
 const userSchema = new mongoose.Schema({
     username: {
         type: String,
