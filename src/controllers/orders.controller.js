@@ -616,6 +616,94 @@ async function updateAdminOrderStatus(req, res, next) {
     }
 }
 
+async function requestReturn(req, res, next) {
+    if (!mongoose.isValidObjectId(req.params.orderId)) {
+        return res.status(400).json({ message: 'Invalid order ID.' });
+    }
+
+    try {
+        const order = await OrderModel.findOne({
+            _id: req.params.orderId,
+            userId: req.authUserId,
+            status: 'delivered'
+        });
+        if (!order) return res.status(404).json({ message: 'Only a delivered order can be returned.' });
+        if (order.returnStatus === 'requested') {
+            return res.status(409).json({ message: 'Your return request is awaiting admin approval.' });
+        }
+        if (order.returnStatus === 'accepted') {
+            return res.status(409).json({ message: 'This return has already been accepted.' });
+        }
+
+        const deliveredEvent = order.statusHistory
+            ?.filter((entry) => entry.status === 'delivered')
+            .sort((left, right) => right.changedAt - left.changedAt)[0];
+        const deliveredAt = deliveredEvent?.changedAt || order.updatedAt || order.createdAt;
+        if (!deliveredAt || Date.now() - new Date(deliveredAt).getTime() > ORDER_CANCELLATION_WINDOW_MS) {
+            return res.status(409).json({ message: 'The 2-day return window has ended.' });
+        }
+
+        const updatedOrder = await OrderModel.findOneAndUpdate(
+            { _id: order._id, status: 'delivered', returnStatus: 'none' },
+            { $set: { returnStatus: 'requested' } },
+            { new: true, runValidators: true }
+        );
+        if (!updatedOrder) return res.status(409).json({ message: 'This return could not be requested.' });
+        return res.status(200).json({ order: updatedOrder });
+    } catch (error) {
+        return next(error);
+    }
+}
+
+async function acceptReturn(req, res, next) {
+    if (!mongoose.isValidObjectId(req.params.orderId)) {
+        return res.status(400).json({ message: 'Invalid order ID.' });
+    }
+
+    let session;
+    try {
+        const user = await UserModel.findById(req.authUserId).select('role');
+        if (!user || user.role !== 'admin') {
+            return res.status(403).json({ message: 'Admin access required.' });
+        }
+
+        session = await mongoose.startSession();
+        let outcome;
+        await session.withTransaction(async () => {
+            const order = await OrderModel.findOne({
+                _id: req.params.orderId,
+                status: 'delivered',
+                returnStatus: 'requested'
+            }).session(session);
+            if (!order) {
+                outcome = { status: 409, body: { message: 'This order has no pending return request.' } };
+                return;
+            }
+
+            for (const item of order.items) {
+                const product = await ProductModel.findById(item.productId).session(session);
+                if (product) {
+                    product.stock += item.quantity;
+                    product.soldCount = Math.max(0, Number(product.soldCount || 0) - item.quantity);
+                    await product.save({ session });
+                }
+            }
+
+            const updatedOrder = await OrderModel.findOneAndUpdate(
+                { _id: order._id, status: 'delivered', returnStatus: 'requested' },
+                { $set: { returnStatus: 'accepted', returnedAt: new Date() } },
+                { new: true, runValidators: true, session }
+            );
+            outcome = { status: 200, body: { order: updatedOrder } };
+        });
+        return res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+        return next(error);
+    } finally {
+        if (session) await session.endSession();
+    }
+}
+
 async function markRefundProcessed(req, res, next) {
     if (!mongoose.isValidObjectId(req.params.orderId)) {
         return res.status(400).json({ message: 'Invalid order ID.' });
@@ -678,6 +766,8 @@ module.exports = {
     getMyOrders,
     getAdminOrders,
     cancelMyOrder,
+    requestReturn,
+    acceptReturn,
     updateAdminOrderStatus,
     markRefundProcessed,
     getOrderById

@@ -19,6 +19,8 @@ router.get('/admin', ordersController.getAdminOrders);
 router.post('/razorpay', orderActionLimiter, ordersController.createRazorpayOrder);
 router.post('/:orderId/verify-payment', orderActionLimiter, ordersController.verifyRazorpayPayment);
 router.post('/:orderId/cancel', orderActionLimiter, ordersController.cancelMyOrder);
+router.post('/:orderId/request-return', orderActionLimiter, ordersController.requestReturn);
+router.post('/:orderId/accept-return', orderActionLimiter, ordersController.acceptReturn);
 router.patch('/:orderId/status', orderActionLimiter, ordersController.updateAdminOrderStatus);
 router.patch('/:orderId/refund', orderActionLimiter, ordersController.markRefundProcessed);
 router.post('/', orderActionLimiter, ordersController.createCashOnDeliveryOrder);

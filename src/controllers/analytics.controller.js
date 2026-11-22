@@ -6,6 +6,7 @@ const CancelledOrderModel = require('../models/cancelled-order.model');
 const ProductModel = require('../models/product.model');
 
 const RANGE_DAYS = { week: 7, month: 30, '6months': 180, '12months': 365 };
+const COMPLETION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
 async function requireAdmin(req) {
     const user = await UserModel.findById(req.authUserId).select('role');
@@ -21,13 +22,21 @@ async function trackEvent(req, res, next) {
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId.slice(0, 100) : '';
     if (!sessionId) return res.status(400).json({ message: 'Session ID is required.' });
     try {
+        const headerLocation = [
+            req.headers['x-vercel-ip-city'],
+            req.headers['cf-ipcity'],
+            req.headers['x-vercel-ip-country-region']
+        ].filter((value) => typeof value === 'string' && value.trim()).join(', ');
+        const location = typeof body.location === 'string' && body.location.trim()
+            ? body.location.trim().slice(0, 100)
+            : headerLocation || 'Unknown';
         await AnalyticsEvent.create({
             sessionId,
             type,
             page: typeof body.page === 'string' ? body.page.slice(0, 200) : '',
             keyword: typeof body.keyword === 'string' ? body.keyword.trim().slice(0, 100) : '',
             durationSeconds: Number.isFinite(Number(body.durationSeconds)) ? Math.max(0, Number(body.durationSeconds)) : 0,
-            location: typeof body.location === 'string' ? body.location.trim().slice(0, 100) : ''
+            location
         });
         return res.status(201).json({ tracked: true });
     } catch (error) {
@@ -38,6 +47,13 @@ async function trackEvent(req, res, next) {
 function getRangeStart(range) {
     const days = RANGE_DAYS[range] || RANGE_DAYS.month;
     return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
+
+function getDeliveredAt(order) {
+    const deliveredEvent = order.statusHistory
+        ?.filter((entry) => entry.status === 'delivered')
+        .sort((left, right) => new Date(right.changedAt) - new Date(left.changedAt))[0];
+    return deliveredEvent?.changedAt || order.updatedAt || order.createdAt;
 }
 
 function ranked(items, key, countKey) {
@@ -53,12 +69,16 @@ async function getAnalytics(req, res, next) {
         const range = typeof req.query.range === 'string' ? req.query.range : 'month';
         const start = getRangeStart(range);
 
-        const [events, deliveredOrders, cancelledOrders, legacyCancelled, products] = await Promise.all([
+        const [events, allOrders, deliveredOrders, cancelledOrders, legacyCancelled, products, allDashboardOrders, allCancelledOrders, allLegacyCancelledOrders] = await Promise.all([
             AnalyticsEvent.find({ createdAt: { $gte: start } }),
+            OrderModel.find({ createdAt: { $gte: start } }).select('status amountPaise items createdAt deliveryAddress'),
             OrderModel.find({ status: 'delivered', createdAt: { $gte: start } }),
             CancelledOrderModel.find({ createdAt: { $gte: start } }),
             OrderModel.find({ status: 'cancelled', createdAt: { $gte: start } }),
-            ProductModel.find()
+            ProductModel.find(),
+            OrderModel.find({}).select('status amountPaise items createdAt statusHistory deliveryAddress returnStatus'),
+            CancelledOrderModel.find({}).select('status amountPaise items createdAt statusHistory returnStatus'),
+            OrderModel.find({ status: 'cancelled' }).select('status amountPaise items createdAt statusHistory returnStatus')
         ]);
 
         const sessions = new Set(events.map((event) => event.sessionId));
@@ -85,7 +105,19 @@ async function getAnalytics(req, res, next) {
         const salesByDay = {};
         const productSales = {};
         const productProfit = {};
-        for (const order of deliveredOrders) {
+        const completedSalesOrders = allDashboardOrders.filter((order) => {
+            if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
+            const deliveredAt = getDeliveredAt(order);
+            return deliveredAt && Date.now() - new Date(deliveredAt).getTime() >= COMPLETION_WINDOW_MS;
+        });
+        const inProcessOrders = allDashboardOrders.filter((order) => {
+            if (['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status)) return true;
+            if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
+            const deliveredAt = getDeliveredAt(order);
+            return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
+        });
+        const acceptedReturns = allDashboardOrders.filter((order) => order.returnStatus === 'accepted');
+        for (const order of completedSalesOrders) {
             const address = order.deliveryAddress || {};
             const location = [address.city, address.state].filter(Boolean).join(', ') || 'Unknown';
             salesByLocation[location] = (salesByLocation[location] || 0) + 1;
@@ -127,15 +159,93 @@ async function getAnalytics(req, res, next) {
                 averageSeconds: exits ? Math.round(pageDurations[page] / exits) : 0
             }))
             .sort((a, b) => b.exits - a.exits).slice(0, 10);
+        const realtimeCutoff = new Date(Date.now() - 5 * 60 * 1000);
+        const realtimeEvents = await AnalyticsEvent.find({ createdAt: { $gte: realtimeCutoff } }).select('sessionId');
+        const realtimeVisitors = new Set(realtimeEvents.map((event) => event.sessionId)).size;
+
+        const inProcessStatuses = ['pending_payment', 'confirmed', 'processing', 'shipped'];
+        const cancelledInRange = [...cancelledOrders, ...legacyCancelled];
+        const statusCounts = [
+            {
+                label: 'Completed',
+                count: completedSalesOrders.length,
+                sales: completedSalesOrders.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+            },
+            {
+                label: 'In process',
+                count: inProcessOrders.length,
+                sales: inProcessOrders.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+            },
+            {
+                label: 'Returned',
+                count: acceptedReturns.length,
+                sales: acceptedReturns.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+            },
+            {
+                label: 'Cancelled',
+                count: cancelledInRange.length,
+                sales: cancelledInRange.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+            }
+        ];
+        const topPages = pagePerformance
+            .map((row) => ({ page: row.page || '/', visitors: row.exits, averageSeconds: row.averageSeconds }))
+            .sort((a, b) => b.visitors - a.visitors)
+            .slice(0, 10);
+        const recentCatalogues = [];
+        const seenTitles = new Set();
+        for (const product of [...products].sort((left, right) => String(right._id).localeCompare(String(left._id)))) {
+            if (!product.title || seenTitles.has(product.title)) continue;
+            seenTitles.add(product.title);
+            const catalogueProducts = products.filter((entry) => entry.title === product.title);
+            const productIds = new Set(catalogueProducts.map((entry) => String(entry._id)));
+            const containsCatalogue = (order) => order.items?.some((item) => productIds.has(String(item.productId)));
+            const catalogueOrders = allDashboardOrders.filter(containsCatalogue);
+            const catalogueCancelled = [...allCancelledOrders, ...allLegacyCancelledOrders].filter(containsCatalogue);
+            const catalogueCompleted = catalogueOrders.filter((order) => {
+                if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
+                const deliveredAt = getDeliveredAt(order);
+                return deliveredAt && Date.now() - new Date(deliveredAt).getTime() >= COMPLETION_WINDOW_MS;
+            }).length;
+            const catalogueInProcess = catalogueOrders.filter((order) => (
+                ['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status) ||
+                (order.status === 'delivered' && order.returnStatus !== 'accepted' &&
+                    (() => {
+                        const deliveredAt = getDeliveredAt(order);
+                        return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
+                    })())
+            )).length;
+            recentCatalogues.push({
+                title: product.title,
+                heading: product.heading,
+                image: product.url || '',
+                uri: product.uri || '',
+                views: catalogueProducts.reduce((sum, entry) => sum + Number(entry.viewCount || 0), 0),
+                orders: catalogueOrders.filter((order) => order.status !== 'cancelled').length,
+                inProcess: catalogueInProcess,
+                completed: catalogueCompleted,
+                cancelled: catalogueCancelled.length,
+                returns: catalogueOrders.filter((order) => order.returnStatus === 'accepted').length
+            });
+            if (recentCatalogues.length === 5) break;
+        }
 
         return res.status(200).json({
             range,
             summary: {
                 visitors: sessions.size,
                 visits: events.filter((event) => event.type === 'visit').length,
-                deliveredOrders: deliveredOrders.length,
-                salesPaise: deliveredOrders.reduce((sum, order) => sum + order.amountPaise, 0)
+                deliveredOrders: completedSalesOrders.length,
+                salesPaise: completedSalesOrders.reduce((sum, order) => sum + order.amountPaise, 0),
+                completedOrders: completedSalesOrders.length,
+                inProcessOrders: inProcessOrders.length,
+                returnOrders: acceptedReturns.length,
+                realtimeVisitors,
+                inProcessRevenuePaise: inProcessOrders.reduce((sum, order) => sum + order.amountPaise, 0),
+                cancelledOrders: cancelledInRange.length
             },
+            statusCounts,
+            recentCatalogues,
+            topPages,
             visitorLocations: ranked(locationCounts, 'location', 'visitors'),
             reachByHour: Object.entries(hourCounts).map(([hour, visitors]) => ({ hour: Number(hour), visitors }))
                 .sort((a, b) => a.hour - b.hour),

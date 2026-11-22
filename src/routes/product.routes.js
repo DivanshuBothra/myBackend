@@ -39,6 +39,7 @@ upload.single('image'),
 productController.handleProductRequest
 );
 router.get('/admin/inventory', productController.getInventorySales);
+router.patch('/admin/inventory/:productId', productController.adjustInventory);
 
 // Count a product view, rate limited.
 router.post('/:productId/view', viewLimiter, productController.incrementProductView);

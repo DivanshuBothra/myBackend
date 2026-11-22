@@ -46,9 +46,13 @@ async function handleProductRequest(req, res, next) {
     }
 
     // Validate the text fields before uploading an image or writing to the database.
-    const { title, heading, about, price: rawPrice, costPrice: rawCostPrice, stock: rawStock } = req.body || {};
+    const { title, heading, about, price: rawPrice, costPrice: rawCostPrice, purchaseCost: rawPurchaseCost,
+        taxPercent: rawTaxPercent, deliveryCostPerUnit: rawDeliveryCost, stock: rawStock } = req.body || {};
     const price = Number(rawPrice);
     const costPrice = rawCostPrice === undefined || rawCostPrice === '' ? 0 : Number(rawCostPrice);
+    const purchaseCost = rawPurchaseCost === undefined || rawPurchaseCost === '' ? 0 : Number(rawPurchaseCost);
+    const taxPercent = rawTaxPercent === undefined || rawTaxPercent === '' ? 0 : Number(rawTaxPercent);
+    const deliveryCostPerUnit = rawDeliveryCost === undefined || rawDeliveryCost === '' ? 0 : Number(rawDeliveryCost);
     const stock = Number(rawStock);
     if (
         typeof title !== 'string' || !title.trim() ||
@@ -57,6 +61,9 @@ async function handleProductRequest(req, res, next) {
         typeof rawPrice !== 'string' || !rawPrice.trim() ||
         !Number.isFinite(price) || price < 0 ||
         !Number.isFinite(costPrice) || costPrice < 0 || costPrice > price ||
+        !Number.isFinite(purchaseCost) || purchaseCost < 0 ||
+        !Number.isFinite(taxPercent) || taxPercent < 0 || taxPercent > 100 ||
+        !Number.isFinite(deliveryCostPerUnit) || deliveryCostPerUnit < 0 ||
         typeof rawStock !== 'string' || !rawStock.trim() ||
         !Number.isInteger(stock) || stock < 0
     ) {
@@ -84,6 +91,9 @@ async function handleProductRequest(req, res, next) {
             about: about.trim(),
             price,
             costPrice,
+            purchaseCost,
+            taxPercent,
+            deliveryCostPerUnit,
             stock
         });
 
@@ -96,6 +106,7 @@ async function handleProductRequest(req, res, next) {
                 heading: product.heading,
                 about: product.about,
                 price: product.price,
+                costPrice: product.costPrice,
                 stock: product.stock,
                 soldCount: product.soldCount
             }
@@ -110,6 +121,38 @@ async function handleProductRequest(req, res, next) {
             }
         }
 
+        return next(error);
+    }
+}
+
+async function adjustInventory(req, res, next) {
+    const token = req.cookies.token;
+    if (!token) return res.status(401).json({ message: 'Unauthorized' });
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
+        if (!mongoose.isValidObjectId(req.params.productId)) {
+            return res.status(400).json({ message: 'Invalid product ID' });
+        }
+        const quantity = Number(req.body?.quantity);
+        const reason = req.body?.reason === 'damaged' ? 'damaged' : 'restock';
+        if (!Number.isInteger(quantity) || quantity < 1) {
+            return res.status(400).json({ message: 'Enter a valid quantity.' });
+        }
+        const update = reason === 'damaged'
+            ? { $inc: { stock: -quantity, damagedCount: quantity } }
+            : { $inc: { stock: quantity } };
+        const product = await ProductModel.findOneAndUpdate(
+            reason === 'damaged' ? { _id: req.params.productId, stock: { $gte: quantity } } : { _id: req.params.productId },
+            update,
+            { new: true }
+        );
+        if (!product) return res.status(409).json({ message: 'Damaged quantity cannot exceed remaining stock.' });
+        return res.status(200).json({ product });
+    } catch (error) {
+        if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
         return next(error);
     }
 }
@@ -129,8 +172,14 @@ async function getInventorySales(req, res, next) {
                 title: product.title,
                 heading: product.heading,
                 price: product.price,
+                costPrice: product.costPrice,
+                purchaseCost: product.purchaseCost,
+                taxPercent: product.taxPercent,
+                deliveryCostPerUnit: product.deliveryCostPerUnit,
                 stock: product.stock,
-                soldCount: product.soldCount
+                soldCount: product.soldCount,
+                damagedCount: product.damagedCount,
+                viewCount: product.viewCount
             }))
         });
     } catch (error) {
@@ -198,6 +247,7 @@ async function incrementProductView(req, res, next) {
 
 module.exports = {
     handleProductRequest,
+    adjustInventory,
     getInventorySales,
     getAllProducts,
     getProductById,

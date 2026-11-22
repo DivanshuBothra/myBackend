@@ -36,6 +36,27 @@ const productSchema = new mongoose.Schema({
         default: 0,
         min: 0,
     },
+    purchaseCost:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    taxPercent:{
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100,
+    },
+    deliveryCostPerUnit:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    damagedCount:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
     viewCount:{
         type: Number,
         default: 0,
