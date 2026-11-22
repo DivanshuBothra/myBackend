@@ -645,7 +645,7 @@ async function requestReturn(req, res, next) {
 
         const updatedOrder = await OrderModel.findOneAndUpdate(
             { _id: order._id, status: 'delivered', returnStatus: 'none' },
-            { $set: { returnStatus: 'requested' } },
+            { $set: { returnStatus: 'requested', returnRequestedAt: new Date() } },
             { new: true, runValidators: true }
         );
         if (!updatedOrder) return res.status(409).json({ message: 'This return could not be requested.' });

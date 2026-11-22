@@ -117,6 +117,11 @@ async function getAnalytics(req, res, next) {
             return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
         });
         const acceptedReturns = allDashboardOrders.filter((order) => order.returnStatus === 'accepted');
+        const pendingConfirmationOrders = allDashboardOrders.filter((order) => {
+            if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
+            const deliveredAt = getDeliveredAt(order);
+            return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
+        });
         for (const order of completedSalesOrders) {
             const address = order.deliveryAddress || {};
             const location = [address.city, address.state].filter(Boolean).join(', ') || 'Unknown';
@@ -256,6 +261,8 @@ async function getAnalytics(req, res, next) {
                 salesPaise: completedSalesOrders.reduce((sum, order) => sum + order.amountPaise, 0),
                 completedOrders: completedSalesOrders.length,
                 inProcessOrders: inProcessOrders.length,
+                pendingConfirmationOrders: pendingConfirmationOrders.length,
+                pendingConfirmationRevenuePaise: pendingConfirmationOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
                 returnOrders: acceptedReturns.length,
                 realtimeVisitors,
                 inProcessRevenuePaise: inProcessOrders.reduce((sum, order) => sum + order.amountPaise, 0),
