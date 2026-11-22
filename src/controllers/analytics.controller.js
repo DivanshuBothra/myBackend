@@ -5,7 +5,7 @@ const OrderModel = require('../models/order.model');
 const CancelledOrderModel = require('../models/cancelled-order.model');
 const ProductModel = require('../models/product.model');
 
-const RANGE_DAYS = { week: 7, month: 30, '6months': 180, '12months': 365 };
+const RANGE_DAYS = { '24h': 1, '3d': 3, week: 7, month: 30, '6months': 180, '12months': 365 };
 const COMPLETION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
 async function requireAdmin(req) {
@@ -76,9 +76,9 @@ async function getAnalytics(req, res, next) {
             CancelledOrderModel.find({ createdAt: { $gte: start } }),
             OrderModel.find({ status: 'cancelled', createdAt: { $gte: start } }),
             ProductModel.find(),
-            OrderModel.find({}).select('status amountPaise items createdAt statusHistory deliveryAddress returnStatus'),
-            CancelledOrderModel.find({}).select('status amountPaise items createdAt statusHistory returnStatus'),
-            OrderModel.find({ status: 'cancelled' }).select('status amountPaise items createdAt statusHistory returnStatus')
+            OrderModel.find({}).select('status amountPaise items createdAt updatedAt statusHistory deliveryAddress returnStatus returnRequestedAt returnedAt cancelledAt'),
+            CancelledOrderModel.find({}).select('status amountPaise items createdAt updatedAt cancelledAt statusHistory returnStatus'),
+            OrderModel.find({ status: 'cancelled' }).select('status amountPaise items createdAt updatedAt cancelledAt statusHistory returnStatus')
         ]);
 
         const sessions = new Set(events.map((event) => event.sessionId));
@@ -122,11 +122,42 @@ async function getAnalytics(req, res, next) {
             const deliveredAt = getDeliveredAt(order);
             return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
         });
-        for (const order of completedSalesOrders) {
+        const periodCompletedOrders = completedSalesOrders.filter((order) => {
+            const confirmedAt = getDeliveredAt(order);
+            return confirmedAt && new Date(confirmedAt).getTime() >= start.getTime();
+        });
+        const periodActiveOrders = allDashboardOrders.filter((order) =>
+            ['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status) &&
+            new Date(order.createdAt).getTime() >= start.getTime()
+        );
+        const periodInProcessOrders = allDashboardOrders.filter((order) => {
+            if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
+            const deliveredAt = getDeliveredAt(order);
+            return deliveredAt &&
+                new Date(deliveredAt).getTime() >= start.getTime() &&
+                Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
+        });
+        const periodAcceptedReturns = acceptedReturns.filter((order) => {
+            const returnDate = order.returnedAt || order.returnRequestedAt || getDeliveredAt(order);
+            return returnDate && new Date(returnDate).getTime() >= start.getTime();
+        });
+        const periodCancelledOrders = [...allCancelledOrders, ...allLegacyCancelledOrders]
+            .filter((order) => {
+                const cancelledDate = order.cancelledAt || order.updatedAt || order.createdAt;
+                return cancelledDate && new Date(cancelledDate).getTime() >= start.getTime();
+            })
+            .filter((order, index, orders) => (
+                orders.findIndex((candidate) => String(candidate._id) === String(order._id)) === index
+            ));
+        const countOrderItems = (orders) => orders.reduce((count, order) => (
+            count + (order.items || []).reduce((itemCount, item) => itemCount + Number(item.quantity || 0), 0)
+        ), 0);
+        for (const order of periodCompletedOrders) {
             const address = order.deliveryAddress || {};
             const location = [address.city, address.state].filter(Boolean).join(', ') || 'Unknown';
             salesByLocation[location] = (salesByLocation[location] || 0) + 1;
-            const day = order.createdAt.toISOString().slice(0, 10);
+            const confirmationDate = getDeliveredAt(order);
+            const day = confirmationDate ? new Date(confirmationDate).toISOString().slice(0, 10) : order.createdAt.toISOString().slice(0, 10);
             salesByDay[day] = (salesByDay[day] || 0) + order.amountPaise / 100;
             for (const item of order.items) {
                 const id = String(item.productId);
@@ -257,13 +288,22 @@ async function getAnalytics(req, res, next) {
             summary: {
                 visitors: sessions.size,
                 visits: events.filter((event) => event.type === 'visit').length,
-                deliveredOrders: completedSalesOrders.length,
-                salesPaise: completedSalesOrders.reduce((sum, order) => sum + order.amountPaise, 0),
-                completedOrders: completedSalesOrders.length,
-                inProcessOrders: inProcessOrders.length,
-                pendingConfirmationOrders: pendingConfirmationOrders.length,
-                pendingConfirmationRevenuePaise: pendingConfirmationOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
-                returnOrders: acceptedReturns.length,
+                deliveredOrders: periodCompletedOrders.length,
+                salesPaise: periodCompletedOrders.reduce((sum, order) => sum + order.amountPaise, 0),
+                completedOrders: periodCompletedOrders.length,
+                activeOrders: periodActiveOrders.length,
+                activeOrderAmountPaise: periodActiveOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
+                inProcessOrders: periodInProcessOrders.length,
+                inProcessAmountPaise: periodInProcessOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
+                inProcessProductCount: countOrderItems(periodInProcessOrders),
+                pendingConfirmationOrders: periodInProcessOrders.length,
+                pendingConfirmationRevenuePaise: periodInProcessOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
+                returnOrders: periodAcceptedReturns.length,
+                returnAmountPaise: periodAcceptedReturns.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
+                returnedProductCount: countOrderItems(periodAcceptedReturns),
+                cancelledOrdersPeriod: periodCancelledOrders.length,
+                cancelledAmountPaise: periodCancelledOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
+                cancelledProductCount: countOrderItems(periodCancelledOrders),
                 realtimeVisitors,
                 inProcessRevenuePaise: inProcessOrders.reduce((sum, order) => sum + order.amountPaise, 0),
                 cancelledOrders: cancelledInRange.length
