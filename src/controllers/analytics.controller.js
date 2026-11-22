@@ -191,43 +191,61 @@ async function getAnalytics(req, res, next) {
             .map((row) => ({ page: row.page || '/', visitors: row.exits, averageSeconds: row.averageSeconds }))
             .sort((a, b) => b.visitors - a.visitors)
             .slice(0, 10);
-        const recentCatalogues = [];
-        const seenTitles = new Set();
-        for (const product of [...products].sort((left, right) => String(right._id).localeCompare(String(left._id)))) {
-            if (!product.title || seenTitles.has(product.title)) continue;
-            seenTitles.add(product.title);
-            const catalogueProducts = products.filter((entry) => entry.title === product.title);
-            const productIds = new Set(catalogueProducts.map((entry) => String(entry._id)));
-            const containsCatalogue = (order) => order.items?.some((item) => productIds.has(String(item.productId)));
-            const catalogueOrders = allDashboardOrders.filter(containsCatalogue);
-            const catalogueCancelled = [...allCancelledOrders, ...allLegacyCancelledOrders].filter(containsCatalogue);
-            const catalogueCompleted = catalogueOrders.filter((order) => {
-                if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
-                const deliveredAt = getDeliveredAt(order);
-                return deliveredAt && Date.now() - new Date(deliveredAt).getTime() >= COMPLETION_WINDOW_MS;
-            }).length;
-            const catalogueInProcess = catalogueOrders.filter((order) => (
-                ['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status) ||
-                (order.status === 'delivered' && order.returnStatus !== 'accepted' &&
-                    (() => {
-                        const deliveredAt = getDeliveredAt(order);
-                        return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
-                    })())
-            )).length;
-            recentCatalogues.push({
-                title: product.title,
-                heading: product.heading,
-                image: product.url || '',
-                uri: product.uri || '',
-                views: catalogueProducts.reduce((sum, entry) => sum + Number(entry.viewCount || 0), 0),
-                orders: catalogueOrders.filter((order) => order.status !== 'cancelled').length,
-                inProcess: catalogueInProcess,
-                completed: catalogueCompleted,
-                cancelled: catalogueCancelled.length,
-                returns: catalogueOrders.filter((order) => order.returnStatus === 'accepted').length
+        const getRecentProductTime = (product) => {
+            const timestamp = product.createdAt ? new Date(product.createdAt).getTime() : 0;
+            if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+            return mongoose.isValidObjectId(product._id) ? product._id.getTimestamp().getTime() : 0;
+        };
+        const recentProducts = [...products]
+            .sort((left, right) => getRecentProductTime(right) - getRecentProductTime(left))
+            .slice(0, 5)
+            .map((product) => {
+                const productId = String(product._id);
+                const productOrders = allDashboardOrders.filter((order) =>
+                    order.items?.some((item) => String(item.productId) === productId)
+                );
+                const completed = productOrders.filter((order) => {
+                    if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
+                    const deliveredAt = getDeliveredAt(order);
+                    return deliveredAt && Date.now() - new Date(deliveredAt).getTime() >= COMPLETION_WINDOW_MS;
+                }).reduce((count, order) => {
+                    const item = order.items.find((entry) => String(entry.productId) === productId);
+                    return count + Number(item?.quantity || 0);
+                }, 0);
+                const inProcess = productOrders.filter((order) => (
+                    ['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status) ||
+                    (order.status === 'delivered' && order.returnStatus !== 'accepted' &&
+                        (() => {
+                            const deliveredAt = getDeliveredAt(order);
+                            return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
+                        })())
+                )).reduce((count, order) => {
+                    const item = order.items.find((entry) => String(entry.productId) === productId);
+                    return count + Number(item?.quantity || 0);
+                }, 0);
+                const returns = productOrders.filter((order) => order.returnStatus === 'accepted')
+                    .reduce((count, order) => {
+                        const item = order.items.find((entry) => String(entry.productId) === productId);
+                        return count + Number(item?.quantity || 0);
+                    }, 0);
+                const orders = productOrders.filter((order) => order.status !== 'cancelled')
+                    .reduce((count, order) => {
+                        const item = order.items.find((entry) => String(entry.productId) === productId);
+                        return count + Number(item?.quantity || 0);
+                    }, 0);
+
+                return {
+                    title: product.title,
+                    heading: product.heading,
+                    image: product.url || '',
+                    uri: product.uri || '',
+                    views: Number(product.viewCount || 0),
+                    orders,
+                    inProcess,
+                    completed,
+                    returns
+                };
             });
-            if (recentCatalogues.length === 5) break;
-        }
 
         return res.status(200).json({
             range,
@@ -244,7 +262,7 @@ async function getAnalytics(req, res, next) {
                 cancelledOrders: cancelledInRange.length
             },
             statusCounts,
-            recentCatalogues,
+            recentProducts,
             topPages,
             visitorLocations: ranked(locationCounts, 'location', 'visitors'),
             reachByHour: Object.entries(hourCounts).map(([hour, visitors]) => ({ hour: Number(hour), visitors }))
