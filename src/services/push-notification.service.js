@@ -25,10 +25,13 @@ async function sendPushToSubscriptions(subscriptions, payload) {
             return 'sent';
         } catch (error) {
             const statusCode = Number(error.statusCode || error.status);
-            if (statusCode === 404 || statusCode === 410) {
+            if (statusCode === 404 || statusCode === 410 || statusCode === 401 || statusCode === 403) {
                 await PushSubscriptionModel.deleteOne({ endpoint: subscription.endpoint }).catch((deleteError) => {
                     console.error('Could not remove an expired push subscription:', deleteError.name);
                 });
+                if (statusCode === 401 || statusCode === 403) {
+                    console.error('Removed a push subscription rejected by the push service; the admin device will resubscribe on its next admin visit.');
+                }
                 return 'expired';
             }
 
@@ -45,10 +48,17 @@ async function sendPushToSubscriptions(subscriptions, payload) {
 
 async function notifyAdminsNewOrder(order) {
     try {
-        if (!pushConfigured || !order?._id) return;
+        if (!order?._id) return;
+        if (!pushConfigured) {
+            console.error('New-order push skipped: VAPID keys are not configured on this backend.');
+            return;
+        }
 
         const subscriptions = await PushSubscriptionModel.find({}).lean();
-        if (!subscriptions.length) return;
+        if (!subscriptions.length) {
+            console.error('New-order push skipped: no admin devices are subscribed.');
+            return;
+        }
 
         const orderTime = new Intl.DateTimeFormat('en-IN', {
             timeZone: 'Asia/Kolkata',
@@ -57,11 +67,12 @@ async function notifyAdminsNewOrder(order) {
             hourCycle: 'h23'
         }).format(new Date(order.createdAt || Date.now()));
 
-        await sendPushToSubscriptions(subscriptions, {
+        const result = await sendPushToSubscriptions(subscriptions, {
             title: 'New Order',
             body: `Order placed at ${orderTime}, User ID: ${order.userId}`,
             url: `/admin?tab=orders&orderId=${encodeURIComponent(order._id)}`
         });
+        console.info(`New-order push finished: ${result.sent} delivered, ${result.failed} not delivered.`);
     } catch (error) {
         // Push failures must never affect checkout or payment confirmation.
         console.error('Could not prepare new-order push notification:', error.name || 'unknown error');

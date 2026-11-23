@@ -172,6 +172,17 @@ async function loadOrderContext(req, res) {
             return null;
         }
 
+        const availableStock = Math.max(0, Number(product.stock) || 0);
+        if (availableStock < quantity) {
+            res.status(409).json({
+                code: 'INSUFFICIENT_STOCK',
+                message: availableStock === 0
+                    ? `${heading.trim()} is currently out of stock. Please remove it from your cart or choose another product.`
+                    : `Only ${availableStock} unit${availableStock === 1 ? '' : 's'} of ${heading.trim()} available. Update the cart quantity and try again.`
+            });
+            return null;
+        }
+
         items.push({
             productId: product._id,
             title: title.trim(),
@@ -207,7 +218,11 @@ async function createCashOnDeliveryOrder(req, res, next) {
                         { $inc: { stock: -item.quantity } },
                         { new: true, session }
                     );
-                    if (!reserved) throw new Error(`Insufficient stock for ${item.heading}.`);
+                    if (!reserved) {
+                        const error = new Error(`Stock for ${item.heading} changed. Update your cart quantity and try again.`);
+                        error.code = 'INSUFFICIENT_STOCK';
+                        throw error;
+                    }
                 }
                 [order] = await OrderModel.create([{
             orderNumber: generateOrderNumber(),
@@ -368,7 +383,11 @@ async function verifyRazorpayPayment(req, res, next) {
                         { $inc: { stock: -item.quantity } },
                         { new: true, session: verificationSession }
                     );
-                    if (!reserved) throw new Error(`Insufficient stock for ${item.heading}.`);
+                    if (!reserved) {
+                        const error = new Error(`Stock for ${item.heading} changed. Update your cart quantity and try again.`);
+                        error.code = 'INSUFFICIENT_STOCK';
+                        throw error;
+                    }
                 }
                 updatedOrder = await OrderModel.findOneAndUpdate(
                     { _id: order._id, userId: req.authUserId, paymentStatus: 'pending', status: 'pending_payment' },

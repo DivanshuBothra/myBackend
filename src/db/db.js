@@ -1,11 +1,13 @@
 const mongoose = require('mongoose');
 
-const productConnection = mongoose.createConnection();
+// Use the same MongoClient for both databases so one transaction session can
+// safely update product stock and the user's order across those databases.
+const productConnection = mongoose.connection.useDb('product', { useCache: true });
 let connectionPromise;
 
-// Keep users on the URI's database and connect products to a separate database on the same cluster.
+// Keep users/orders on the URI database and products in the `product` database.
 function connectDB() {
-    if (mongoose.connection.readyState === 1 && productConnection.readyState === 1) {
+    if (mongoose.connection.readyState === 1) {
         return Promise.resolve();
     }
     if (connectionPromise) return connectionPromise;
@@ -16,13 +18,7 @@ function connectDB() {
                 await mongoose.connect(process.env.MONGO_URI);
                 console.log('Connected to MongoDB user database');
             }
-
-            if (productConnection.readyState !== 1) {
-                await productConnection.openUri(process.env.MONGO_URI, {
-                    dbName: 'product'
-                });
-                console.log('Connected to MongoDB product database');
-            }
+            console.log('Connected to MongoDB product database through the shared client');
         } catch (error) {
             console.error('Error connecting to MongoDB:', error.name);
             throw error;
@@ -43,5 +39,15 @@ function connectDB() {
 
 module.exports = {
     connectDB,
-    productConnection
+    productConnection,
+    databaseErrorDetails(error) {
+        const message = String(error?.message || 'Database request failed')
+            .replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, '[redacted MongoDB URI]')
+            .slice(0, 500);
+        return {
+            name: error?.name || 'Error',
+            code: error?.code || error?.codeName || undefined,
+            message
+        };
+    }
 };

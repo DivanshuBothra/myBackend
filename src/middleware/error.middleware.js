@@ -33,6 +33,10 @@ function errorHandler(error, req, res, next) {
         return res.status(409).json({ message: 'A record with these details already exists' });
     }
 
+    if (error.code === 'INSUFFICIENT_STOCK') {
+        return res.status(409).json({ code: 'INSUFFICIENT_STOCK', message: error.message });
+    }
+
     if (
         error.status === 403 &&
         error.message?.toLowerCase().includes('account cannot be authenticated')
