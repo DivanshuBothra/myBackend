@@ -4,6 +4,7 @@ const ProductModel = require('../models/product.model');
 const UserModel = require('../models/user.model');
 const OrderModel = require('../models/order.model');
 const CancelledOrderModel = require('../models/cancelled-order.model');
+const { notifyAdminsNewOrder } = require('../services/push-notification.service');
 const cookieOptions = require('../auth-cookie-options');
 const {
     MAX_CONSECUTIVE_ORDER_CANCELLATIONS,
@@ -195,8 +196,20 @@ async function createCashOnDeliveryOrder(req, res, next) {
     try {
         const context = await loadOrderContext(req, res);
         if (!context) return;
-
-        const order = await OrderModel.create({
+        let session;
+        let order;
+        try {
+            session = await mongoose.startSession();
+            await session.withTransaction(async () => {
+                for (const item of context.items) {
+                    const reserved = await ProductModel.findOneAndUpdate(
+                        { _id: item.productId, stock: { $gte: item.quantity } },
+                        { $inc: { stock: -item.quantity } },
+                        { new: true, session }
+                    );
+                    if (!reserved) throw new Error(`Insufficient stock for ${item.heading}.`);
+                }
+                [order] = await OrderModel.create([{
             orderNumber: generateOrderNumber(),
             userId: context.user._id,
             items: context.items,
@@ -207,7 +220,12 @@ async function createCashOnDeliveryOrder(req, res, next) {
             paymentStatus: 'pending',
             status: 'confirmed',
             statusHistory: [{ status: 'confirmed', changedAt: new Date() }]
-        });
+                }], { session });
+            });
+        } finally {
+            if (session) await session.endSession();
+        }
+        void notifyAdminsNewOrder(order);
         return res.status(201).json({ order });
     } catch (error) {
         return next(error);
@@ -340,20 +358,37 @@ async function verifyRazorpayPayment(req, res, next) {
             return res.status(409).json({ message: 'Payment has not been captured for this order.' });
         }
 
-        const updatedOrder = await OrderModel.findOneAndUpdate(
-            { _id: order._id, userId: req.authUserId, paymentStatus: 'pending', status: 'pending_payment' },
-            {
-                $set: {
-                    razorpayPaymentId,
-                    paymentStatus: 'paid',
-                    status: 'confirmed',
-                    paymentInstrument: getPaymentInstrument(gatewayPayment)
-                },
-                $push: { statusHistory: { status: 'confirmed', changedAt: new Date() } }
-            },
-            { new: true, runValidators: true }
-        );
+        let updatedOrder;
+        const verificationSession = await mongoose.startSession();
+        try {
+            await verificationSession.withTransaction(async () => {
+                for (const item of order.items) {
+                    const reserved = await ProductModel.findOneAndUpdate(
+                        { _id: item.productId, stock: { $gte: item.quantity } },
+                        { $inc: { stock: -item.quantity } },
+                        { new: true, session: verificationSession }
+                    );
+                    if (!reserved) throw new Error(`Insufficient stock for ${item.heading}.`);
+                }
+                updatedOrder = await OrderModel.findOneAndUpdate(
+                    { _id: order._id, userId: req.authUserId, paymentStatus: 'pending', status: 'pending_payment' },
+                    {
+                        $set: {
+                            razorpayPaymentId,
+                            paymentStatus: 'paid',
+                            status: 'confirmed',
+                            paymentInstrument: getPaymentInstrument(gatewayPayment)
+                        },
+                        $push: { statusHistory: { status: 'confirmed', changedAt: new Date() } }
+                    },
+                    { new: true, runValidators: true, session: verificationSession }
+                );
+            });
+        } finally {
+            await verificationSession.endSession();
+        }
         if (updatedOrder) {
+            void notifyAdminsNewOrder(updatedOrder);
             return res.status(200).json({ order: updatedOrder });
         }
 
@@ -487,6 +522,14 @@ async function cancelMyOrder(req, res, next) {
             snapshot.refundStatus = order.paymentStatus === 'paid' ? 'pending' : 'not_required';
             snapshot.statusHistory.push({ status: 'cancelled', changedAt });
 
+            for (const item of order.items) {
+                await ProductModel.findByIdAndUpdate(
+                    item.productId,
+                    { $inc: { stock: item.quantity } },
+                    { session }
+                );
+            }
+
             const [cancelledOrder] = await CancelledOrderModel.create([snapshot], { session });
             const deletion = await OrderModel.deleteOne({
                 _id: order._id,
@@ -580,16 +623,6 @@ async function updateAdminOrderStatus(req, res, next) {
             }
 
             if (nextStatus === 'delivered') {
-                for (const item of order.items) {
-                    const stockUpdate = await ProductModel.findOneAndUpdate(
-                        { _id: item.productId, stock: { $gte: item.quantity } },
-                        { $inc: { stock: -item.quantity, soldCount: item.quantity } },
-                        { new: true }
-                    );
-                    if (!stockUpdate) {
-                        throw new Error(`Insufficient stock for ${item.heading}.`);
-                    }
-                }
                 const productsPurchased = await calculatePurchasedProductCount(order.userId, session);
                 await UserModel.updateOne(
                     { _id: order.userId },
@@ -684,7 +717,6 @@ async function acceptReturn(req, res, next) {
                 const product = await ProductModel.findById(item.productId).session(session);
                 if (product) {
                     product.stock += item.quantity;
-                    product.soldCount = Math.max(0, Number(product.soldCount || 0) - item.quantity);
                     await product.save({ session });
                 }
             }

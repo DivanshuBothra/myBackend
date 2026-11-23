@@ -1,5 +1,12 @@
 # Backend configuration
 
+Product photos upload directly from the admin browser to ImageKit so large photo
+sets do not pass through the serverless API body limit. Set both
+`IMAGEKIT_PRIVATE_KEY` and `IMAGEKIT_PUBLIC_KEY` in `backend/.env` and in the
+backend deployment environment. The private key stays on the server; the API
+uses it to sign short-lived browser upload credentials. Product creation accepts
+4–5 photos with a combined size of up to 25 MB.
+
 The checkout's Google Maps location lookup uses the Geocoding API. Set
 `GOOGLE_MAPS_API_KEY` in `backend/.env` and enable the Geocoding API for that key.
 The key stays on the server; location lookup is unavailable until it is configured.

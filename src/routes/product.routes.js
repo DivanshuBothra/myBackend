@@ -1,12 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const multer = require('multer');
 const productController = require('../controllers/product.controller');
-
-const upload = multer({
-storage: multer.memoryStorage(),
-limits: { fileSize: 10 * 1024 * 1024 }, // max 5 MB image
-});
 
 const router = express.Router();
 
@@ -35,9 +29,10 @@ router.get('/images/:fileId', productController.handleProductRequest);
 router.post(
 '/upload',
 uploadLimiter,
-upload.single('image'),
 productController.handleProductRequest
 );
+router.get('/upload-auth', uploadLimiter, productController.getImageUploadAuth);
+router.post('/upload-cleanup', uploadLimiter, productController.cleanupImageUploads);
 router.get('/admin/inventory', productController.getInventorySales);
 router.patch('/admin/inventory/:productId', productController.adjustInventory);
 

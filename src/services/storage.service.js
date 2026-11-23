@@ -55,6 +55,10 @@ async function uploadImage(buffer, originalName, contentType) {
     return { id: result.fileId, url: result.url };
 }
 
+function getUploadAuthenticationParameters() {
+    return imagekit.helper.getAuthenticationParameters();
+}
+
 // Find an image that was stored in GridFS before new uploads moved to ImageKit.
 async function findImage(fileId) {
     const id = toObjectId(fileId);
@@ -83,6 +87,7 @@ async function deleteImage(fileId) {
 
 module.exports = {
     uploadImage,
+    getUploadAuthenticationParameters,
     findImage,
     downloadImage,
     deleteImage

@@ -8,10 +8,10 @@ function errorHandler(error, req, res, next) {
 
     if (error.name === 'MulterError') {
         if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(413).json({ message: 'Image must be 10 MB or smaller' });
+            return res.status(413).json({ message: 'Choose 4 or 5 product photos totaling 25 MB or less.' });
         }
 
-        return res.status(400).json({ message: 'Invalid upload. Send one file using the image field.' });
+        return res.status(400).json({ message: 'Invalid product photo upload. Choose 4 or 5 images.' });
     }
 
     if (error.name === 'ValidationError' || error.name === 'CastError') {

@@ -7,6 +7,10 @@ const productSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    imageUrls:{
+        type: [String],
+        default: [],
+    },
     // Retain this optional field so older GridFS-backed product records remain readable.
     uri:{
         type: String,
@@ -53,6 +57,11 @@ const productSchema = new mongoose.Schema({
         min: 0,
     },
     damagedCount:{
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    supplierReturnCount:{
         type: Number,
         default: 0,
         min: 0,
