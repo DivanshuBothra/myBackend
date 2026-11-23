@@ -10,8 +10,17 @@ const { connectDB } = require('./db/db');
 const cors = require('cors')
 
 const app = express();
+const allowedFrontendOrigins = new Set([
+    'http://localhost:5190',
+    'http://127.0.0.1:5190',
+    ...(process.env.FRONTEND_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean)
+]);
+
 app.use(cors({
-    origin: process.env.FRONTEND_ORIGIN || 'http://localhost:5190',
+    origin(origin, callback) {
+        if (!origin || allowedFrontendOrigins.has(origin)) return callback(null, true);
+        return callback(null, false);
+    },
     credentials: true
 }));
 app.use(express.json());
