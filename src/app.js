@@ -10,15 +10,27 @@ const { connectDB } = require('./db/db');
 const cors = require('cors')
 
 const app = express();
+function normalizeOrigin(value) {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+    } catch {
+        return null;
+    }
+}
+
 const allowedFrontendOrigins = new Set([
     'http://localhost:5190',
     'http://127.0.0.1:5190',
-    ...(process.env.FRONTEND_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean)
+    ...(process.env.FRONTEND_ORIGIN || '')
+        .split(',')
+        .map((origin) => normalizeOrigin(origin.trim()))
+        .filter(Boolean)
 ]);
 
 app.use(cors({
     origin(origin, callback) {
-        if (!origin || allowedFrontendOrigins.has(origin)) return callback(null, true);
+        if (!origin || allowedFrontendOrigins.has(normalizeOrigin(origin))) return callback(null, true);
         return callback(null, false);
     },
     credentials: true

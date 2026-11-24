@@ -2,8 +2,9 @@ const path = require('path');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-// Fail early when the database, token signing key, or external image storage key is absent.
-const requiredEnvironment = ['MONGO_URI', 'JWT_SECRET', 'IMAGEKIT_PRIVATE_KEY'];
+// Database and token signing are required for the API. Image storage is optional
+// so a missing upload key cannot prevent the rest of the backend from starting.
+const requiredEnvironment = ['MONGO_URI', 'JWT_SECRET'];
 const missingEnvironment = requiredEnvironment.filter((name) => !process.env[name]?.trim());
 
 if (missingEnvironment.length > 0) {

@@ -1,5 +1,12 @@
 # Backend configuration
 
+For a deployed frontend, set `FRONTEND_ORIGIN` in the backend deployment to the
+frontend's origin (for example, `https://shop.example.com`). Separate multiple
+origins with commas. The API uses credentialed CORS for these explicit origins.
+Set `MONGO_URI` and `JWT_SECRET` in the backend deployment as well. Image uploads
+also require `IMAGEKIT_PRIVATE_KEY`; without it, the API still starts, but upload
+requests return a configuration error.
+
 Product photos upload directly from the admin browser to ImageKit so large photo
 sets do not pass through the serverless API body limit. Set both
 `IMAGEKIT_PRIVATE_KEY` and `IMAGEKIT_PUBLIC_KEY` in `backend/.env` and in the

@@ -37,6 +37,11 @@ function errorHandler(error, req, res, next) {
         return res.status(409).json({ code: 'INSUFFICIENT_STOCK', message: error.message });
     }
 
+    if (error.code === 'IMAGE_STORAGE_NOT_CONFIGURED') {
+        console.error('Image storage is not configured on this backend.');
+        return res.status(503).json({ message: 'Product image storage is not configured on the server.' });
+    }
+
     if (
         error.status === 403 &&
         error.message?.toLowerCase().includes('account cannot be authenticated')

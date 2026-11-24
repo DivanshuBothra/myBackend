@@ -3,9 +3,23 @@ const mongoose = require('mongoose');
 const { ImageKit, toFile } = require('@imagekit/nodejs');
 
 // Image bytes live in ImageKit; MongoDB stores only the resulting public URL.
-const imagekit = new ImageKit({
-    privateKey: process.env.IMAGEKIT_PRIVATE_KEY
-});
+let imagekit;
+
+// Image storage is only needed for admin uploads and legacy image cleanup.
+// Keep the API itself loadable when this optional integration is not configured.
+function getImageKit() {
+    const privateKey = process.env.IMAGEKIT_PRIVATE_KEY?.trim();
+    if (!privateKey) {
+        const error = new Error('Image storage is not configured on the server.');
+        error.code = 'IMAGE_STORAGE_NOT_CONFIGURED';
+        throw error;
+    }
+
+    if (!imagekit) {
+        imagekit = new ImageKit({ privateKey });
+    }
+    return imagekit;
+}
 
 // GridFS is read-only here so products created before the ImageKit switch keep working.
 let bucket;
@@ -42,7 +56,7 @@ async function uploadImage(buffer, originalName, contentType) {
     const safeName = (originalName || 'image').replace(/[^a-zA-Z0-9._-]/g, '_');
     const fileName = `${crypto.randomUUID()}-${safeName}`;
 
-    const result = await imagekit.files.upload({
+    const result = await getImageKit().files.upload({
         file: await toFile(buffer, fileName, { type: contentType }),
         fileName,
         folder: 'product_images'
@@ -56,7 +70,7 @@ async function uploadImage(buffer, originalName, contentType) {
 }
 
 function getUploadAuthenticationParameters() {
-    return imagekit.helper.getAuthenticationParameters();
+    return getImageKit().helper.getAuthenticationParameters();
 }
 
 // Find an image that was stored in GridFS before new uploads moved to ImageKit.
@@ -82,7 +96,7 @@ function downloadImage(fileId) {
 
 // Remove a newly uploaded ImageKit image if saving its Product document fails.
 async function deleteImage(fileId) {
-    await imagekit.files.delete(fileId);
+    await getImageKit().files.delete(fileId);
 }
 
 module.exports = {
