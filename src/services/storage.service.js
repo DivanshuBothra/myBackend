@@ -81,9 +81,29 @@ async function deleteImage(fileId) {
     await imagekit.files.delete(fileId);
 }
 
+function getUploadAuthenticationParameters(count = 5) {
+    const publicKey = process.env.IMAGEKIT_PUBLIC_KEY?.trim();
+    if (!publicKey || !process.env.IMAGEKIT_PRIVATE_KEY?.trim()) {
+        const error = new Error('Product image uploads are not configured on the server.');
+        error.status = 503;
+        throw error;
+    }
+
+    return {
+        publicKey,
+        uploadAuth: Array.from({ length: count }, () => imagekit.helper.getAuthenticationParameters())
+    };
+}
+
+async function deleteUploadedImage(fileId) {
+    await imagekit.files.delete(fileId);
+}
+
 module.exports = {
     uploadImage,
     findImage,
     downloadImage,
-    deleteImage
+    deleteImage,
+    getUploadAuthenticationParameters,
+    deleteUploadedImage
 };

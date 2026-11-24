@@ -4,13 +4,35 @@ const authRoutes = require('./routes/auth.routes');
 const productRoutes = require('./routes/product.routes');
 const ordersRoutes = require('./routes/orders.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
+const pushRoutes = require('./routes/push.routes');
 const errorHandler = require('./middleware/error.middleware');
 const { connectDB } = require('./db/db');
 const cors = require('cors')
 
 const app = express();
+function normalizeOrigin(value) {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+    } catch {
+        return null;
+    }
+}
+
+const allowedFrontendOrigins = new Set([
+    'http://localhost:5190',
+    'http://127.0.0.1:5190',
+    ...(process.env.FRONTEND_ORIGIN || '')
+        .split(',')
+        .map((origin) => normalizeOrigin(origin.trim()))
+        .filter(Boolean)
+]);
+
 app.use(cors({
-    origin: process.env.FRONTEND_ORIGIN || 'http://localhost:5190',
+    origin(origin, callback) {
+        if (!origin || allowedFrontendOrigins.has(normalizeOrigin(origin))) return callback(null, true);
+        return callback(null, false);
+    },
     credentials: true
 }));
 app.use(express.json());
@@ -33,6 +55,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/push', pushRoutes);
 app.use(errorHandler);
 
 app.get('/', (req, res) => { 

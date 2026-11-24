@@ -69,12 +69,8 @@ async function getAnalytics(req, res, next) {
         const range = typeof req.query.range === 'string' ? req.query.range : 'month';
         const start = getRangeStart(range);
 
-        const [events, allOrders, deliveredOrders, cancelledOrders, legacyCancelled, products, allDashboardOrders, allCancelledOrders, allLegacyCancelledOrders] = await Promise.all([
+        const [events, products, allDashboardOrders, allCancelledOrders, allLegacyCancelledOrders] = await Promise.all([
             AnalyticsEvent.find({ createdAt: { $gte: start } }),
-            OrderModel.find({ createdAt: { $gte: start } }).select('status amountPaise items createdAt deliveryAddress'),
-            OrderModel.find({ status: 'delivered', createdAt: { $gte: start } }),
-            CancelledOrderModel.find({ createdAt: { $gte: start } }),
-            OrderModel.find({ status: 'cancelled', createdAt: { $gte: start } }),
             ProductModel.find(),
             OrderModel.find({}).select('status amountPaise items createdAt updatedAt statusHistory deliveryAddress returnStatus returnRequestedAt returnedAt cancelledAt'),
             CancelledOrderModel.find({}).select('status amountPaise items createdAt updatedAt cancelledAt statusHistory returnStatus'),
@@ -163,14 +159,17 @@ async function getAnalytics(req, res, next) {
                 const id = String(item.productId);
                 productSales[id] = (productSales[id] || 0) + item.quantity;
                 const product = products.find((entry) => String(entry._id) === id);
-                const unitCost = Number(product?.costPrice) || 0;
+                const unitCost = Number(product?.purchaseCost || product?.costPrice) || 0;
                 productProfit[id] = (productProfit[id] || 0) +
                     (Number(item.unitPricePaise) / 100 - unitCost) * item.quantity;
             }
         }
 
         const returnCounts = {};
-        for (const order of [...cancelledOrders, ...legacyCancelled]) {
+        for (const order of allDashboardOrders) {
+            if (order.returnStatus !== 'accepted') continue;
+            const returnedAt = order.returnedAt || order.returnRequestedAt || getDeliveredAt(order);
+            if (!returnedAt || new Date(returnedAt).getTime() < start.getTime()) continue;
             for (const item of order.items || []) {
                 const id = String(item.productId);
                 returnCounts[id] = (returnCounts[id] || 0) + item.quantity;
@@ -184,9 +183,39 @@ async function getAnalytics(req, res, next) {
         const returns = Object.entries(returnCounts)
             .map(([id, quantity]) => ({ productId: id, name: productName(id), quantity }))
             .sort((a, b) => b.quantity - a.quantity).slice(0, 10);
+        const cancellationCounts = {};
+        for (const order of periodCancelledOrders) {
+            for (const item of order.items || []) {
+                const id = String(item.productId);
+                cancellationCounts[id] = (cancellationCounts[id] || 0) + Number(item.quantity || 0);
+            }
+        }
+        const cancellations = Object.entries(cancellationCounts)
+            .map(([id, quantity]) => ({ productId: id, name: productName(id), quantity }))
+            .sort((a, b) => b.quantity - a.quantity).slice(0, 10);
         const profits = Object.entries(productProfit)
             .map(([id, profit]) => ({ productId: id, name: productName(id), profit: Math.round(profit * 100) / 100 }))
             .sort((a, b) => b.profit - a.profit).slice(0, 10);
+
+        const dailyProductSales = new Map();
+        for (const order of periodCompletedOrders) {
+            const deliveredAt = getDeliveredAt(order);
+            if (!deliveredAt) continue;
+            const date = new Date(deliveredAt).toISOString().slice(0, 10);
+            for (const item of order.items || []) {
+                const id = String(item.productId);
+                if (!dailyProductSales.has(id)) dailyProductSales.set(id, new Map());
+                const dailySales = dailyProductSales.get(id);
+                dailySales.set(date, (dailySales.get(date) || 0) + Number(item.quantity || 0));
+            }
+        }
+        const productPerformance = mostSold.slice(0, 5).map((product) => ({
+            productId: product.productId,
+            name: product.name,
+            rows: [...(dailyProductSales.get(product.productId) || new Map()).entries()]
+                .map(([date, quantity]) => ({ date, quantity }))
+                .sort((left, right) => left.date.localeCompare(right.date))
+        }));
 
         const pagePerformance = Object.entries(pageCounts)
             .map(([page, exits]) => ({
@@ -199,23 +228,23 @@ async function getAnalytics(req, res, next) {
         const realtimeEvents = await AnalyticsEvent.find({ createdAt: { $gte: realtimeCutoff } }).select('sessionId');
         const realtimeVisitors = new Set(realtimeEvents.map((event) => event.sessionId)).size;
 
-        const inProcessStatuses = ['pending_payment', 'confirmed', 'processing', 'shipped'];
-        const cancelledInRange = [...cancelledOrders, ...legacyCancelled];
+        const cancelledInRange = periodCancelledOrders;
         const statusCounts = [
             {
                 label: 'Completed',
-                count: completedSalesOrders.length,
-                sales: completedSalesOrders.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+                count: periodCompletedOrders.length,
+                sales: periodCompletedOrders.reduce((sum, order) => sum + order.amountPaise / 100, 0)
             },
             {
                 label: 'In process',
-                count: inProcessOrders.length,
-                sales: inProcessOrders.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+                count: periodInProcessOrders.length + periodActiveOrders.length,
+                sales: [...periodInProcessOrders, ...periodActiveOrders]
+                    .reduce((sum, order) => sum + order.amountPaise / 100, 0)
             },
             {
                 label: 'Returned',
-                count: acceptedReturns.length,
-                sales: acceptedReturns.reduce((sum, order) => sum + order.amountPaise / 100, 0)
+                count: periodAcceptedReturns.length,
+                sales: periodAcceptedReturns.reduce((sum, order) => sum + order.amountPaise / 100, 0)
             },
             {
                 label: 'Cancelled',
@@ -320,7 +349,9 @@ async function getAnalytics(req, res, next) {
             keywords: ranked(keywordCounts, 'keyword', 'searches'),
             pagePerformance,
             mostSold,
+            productPerformance,
             returns,
+            cancellations,
             profits
         });
     } catch (error) {

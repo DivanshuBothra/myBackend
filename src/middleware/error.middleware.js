@@ -46,6 +46,10 @@ function errorHandler(error, req, res, next) {
         });
     }
 
+    if (error.status === 503) {
+        return res.status(503).json({ message: error.message || 'This service is not configured on the server.' });
+    }
+
     if (
         error.name?.includes('Mongo') ||
         error.name?.includes('Mongoose') ||

@@ -4,6 +4,7 @@ const ProductModel = require('../models/product.model');
 const UserModel = require('../models/user.model');
 const OrderModel = require('../models/order.model');
 const CancelledOrderModel = require('../models/cancelled-order.model');
+const { notifyAdminsOfNewOrder } = require('../services/push-notification.service');
 const cookieOptions = require('../auth-cookie-options');
 const {
     MAX_CONSECUTIVE_ORDER_CANCELLATIONS,
@@ -208,6 +209,9 @@ async function createCashOnDeliveryOrder(req, res, next) {
             status: 'confirmed',
             statusHistory: [{ status: 'confirmed', changedAt: new Date() }]
         });
+        await notifyAdminsOfNewOrder(order).catch((error) => {
+            console.error('Could not send the new-order notification:', error.name);
+        });
         return res.status(201).json({ order });
     } catch (error) {
         return next(error);
@@ -354,6 +358,9 @@ async function verifyRazorpayPayment(req, res, next) {
             { new: true, runValidators: true }
         );
         if (updatedOrder) {
+            await notifyAdminsOfNewOrder(updatedOrder).catch((error) => {
+                console.error('Could not send the new-order notification:', error.name);
+            });
             return res.status(200).json({ order: updatedOrder });
         }
 

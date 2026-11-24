@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const productController = require('../controllers/product.controller');
+const requireAuthenticatedUser = require('../middleware/auth.middleware');
 
 const upload = multer({
 storage: multer.memoryStorage(),
@@ -31,15 +32,20 @@ message: { message: 'Too many upload attempts. Please try again later.' },
 // Keep existing GridFS-backed image URLs readable for products created before ImageKit.
 router.get('/images/:fileId', productController.handleProductRequest);
 
+// Admin product form signs up to five direct-to-ImageKit uploads at once.
+router.get('/upload-auth', requireAuthenticatedUser, uploadLimiter, productController.getProductUploadAuth);
+router.post('/upload-cleanup', requireAuthenticatedUser, uploadLimiter, productController.cleanupUploadedImages);
+
 // Admin-only product creation (the controller checks token and admin role).
 router.post(
 '/upload',
+requireAuthenticatedUser,
 uploadLimiter,
 upload.single('image'),
 productController.handleProductRequest
 );
-router.get('/admin/inventory', productController.getInventorySales);
-router.patch('/admin/inventory/:productId', productController.adjustInventory);
+router.get('/admin/inventory', requireAuthenticatedUser, productController.getInventorySales);
+router.patch('/admin/inventory/:productId', requireAuthenticatedUser, productController.adjustInventory);
 
 // Count a product view, rate limited.
 router.post('/:productId/view', viewLimiter, productController.incrementProductView);

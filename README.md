@@ -10,6 +10,13 @@ Online checkout uses Razorpay. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`
 in `backend/.env`, keep automatic payment capture enabled in the Razorpay account,
 and use test keys until the checkout flow has been verified.
 
+Admin order push notifications require `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+and `VAPID_SUBJECT` (`mailto:...` or an `https://` contact URL). Configure the
+same VAPID values in the local backend and the backend hosting environment. The
+private key must stay on the server; only the public key is returned to the admin
+browser. Replace the local development contact address with a real support contact
+before deploying.
+
 Orders receive a unique server-generated order number and are stored with the
 user ID, item quantities, payment timing, amount, and status history. Admins
 advance delivery tracking from confirmed to processing, shipped, and delivered.
