@@ -14,6 +14,8 @@ const {
 } = require('../services/storage.service');
 
 const COMPLETION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+const PAYMENT_RESERVATION_WINDOW_MS = 30 * 60 * 1000;
+const OPEN_ORDER_STATUSES = ['confirmed', 'processing', 'shipped'];
 
 async function ensureAdmin(req, res) {
     if (!req.authUserId) {
@@ -312,9 +314,31 @@ async function adjustInventory(req, res, next) {
             : reason === 'supplier_return'
                 ? { stock: -quantity, supplierReturnCount: quantity }
                 : { stock: quantity };
+        let minimumStock = quantity;
+        if (removesStock) {
+            const pendingPaymentCutoff = new Date(Date.now() - PAYMENT_RESERVATION_WINDOW_MS);
+            const [activeOrders, pendingPaymentOrders] = await Promise.all([
+                OrderModel.find({
+                    status: { $in: OPEN_ORDER_STATUSES },
+                    'items.productId': new mongoose.Types.ObjectId(req.params.productId)
+                }).select('items').lean(),
+                OrderModel.find({
+                    status: 'pending_payment',
+                    createdAt: { $gte: pendingPaymentCutoff },
+                    'items.productId': new mongoose.Types.ObjectId(req.params.productId)
+                }).select('items').lean()
+            ]);
+            const reserved = [...activeOrders, ...pendingPaymentOrders].reduce((sum, order) => (
+                sum + (order.items || [])
+                    .filter((item) => String(item.productId) === req.params.productId)
+                    .reduce((quantitySum, item) => quantitySum + Number(item.quantity || 0), 0)
+            ), 0);
+            minimumStock += reserved;
+        }
+
         const product = await ProductModel.findOneAndUpdate(
             removesStock
-                ? { _id: req.params.productId, stock: { $gte: quantity } }
+                ? { _id: req.params.productId, stock: { $gte: minimumStock } }
                 : { _id: req.params.productId },
             { $inc: increment },
             { new: true }
@@ -340,15 +364,20 @@ async function getInventorySales(req, res, next) {
         ]);
         const productStats = new Map(products.map((product) => [String(product._id), {
             product,
+            reservedCount: 0,
             confirmedSold: 0,
+            lifetimeSoldCount: 0,
             confirmedRevenuePaise: 0,
+            confirmedExpensesPaise: 0,
+            confirmedNetProfitPaise: 0,
             activeCount: 0,
             inProcessCount: 0,
             cancelledCount: 0,
-            returnCount: 0
+            returnCount: 0,
+            lifetimeReturnedCount: 0
         }]));
-        const addOrderItems = (order, field, date) => {
-            if (new Date(date || 0).getTime() < start.getTime()) return;
+        const addOrderItems = (order, field, date, ignoreRange = false) => {
+            if (!ignoreRange && new Date(date || 0).getTime() < start.getTime()) return;
             for (const item of order.items || []) {
                 const stats = productStats.get(String(item.productId));
                 if (stats) stats[field] += Number(item.quantity || 0);
@@ -357,28 +386,54 @@ async function getInventorySales(req, res, next) {
 
         const now = Date.now();
         for (const order of orders) {
-            if (['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status)) {
-                addOrderItems(order, 'activeCount', order.createdAt);
+            const isLivePaymentReservation = order.status === 'pending_payment' &&
+                now - new Date(order.createdAt || 0).getTime() <= PAYMENT_RESERVATION_WINDOW_MS;
+            if (OPEN_ORDER_STATUSES.includes(order.status) || isLivePaymentReservation) {
+                addOrderItems(order, 'activeCount', order.createdAt, true);
+                addOrderItems(order, 'reservedCount', order.createdAt, true);
             }
             if (order.status === 'delivered' && order.returnStatus !== 'accepted') {
                 const deliveredAt = getDeliveredAt(order);
-                if (new Date(deliveredAt || 0).getTime() >= start.getTime()) {
-                    const isInProcess = now - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
-                    for (const item of order.items || []) {
-                        const stats = productStats.get(String(item.productId));
-                        if (!stats) continue;
-                        if (isInProcess) {
-                            stats.inProcessCount += Number(item.quantity || 0);
-                        } else {
-                            stats.confirmedSold += Number(item.quantity || 0);
-                            stats.confirmedRevenuePaise += Number(item.lineTotalPaise || (
-                                Number(item.unitPricePaise || 0) * Number(item.quantity || 0)
-                            ));
-                        }
+                const deliveredTime = new Date(deliveredAt || 0).getTime();
+                const ageSinceDelivery = now - deliveredTime;
+                const isInProcess = ageSinceDelivery >= 0 && ageSinceDelivery < COMPLETION_WINDOW_MS;
+                const isConfirmed = ageSinceDelivery >= COMPLETION_WINDOW_MS;
+                const confirmedTime = deliveredTime + COMPLETION_WINDOW_MS;
+                for (const item of order.items || []) {
+                    const stats = productStats.get(String(item.productId));
+                    if (!stats) continue;
+                    const quantity = Number(item.quantity || 0);
+                    if (isInProcess) stats.inProcessCount += quantity;
+                    if (isConfirmed) stats.lifetimeSoldCount += quantity;
+                    if (isConfirmed && confirmedTime >= start.getTime()) {
+                        const lineRevenuePaise = Number(item.lineTotalPaise || (
+                            Number(item.unitPricePaise || 0) * quantity
+                        ));
+                        const unitCostPaise = Number.isFinite(Number(item.unitPurchaseCostPaise))
+                            ? Number(item.unitPurchaseCostPaise)
+                            : Math.round(Number(stats.product.purchaseCost || stats.product.costPrice || 0) * 100);
+                        const deliveryCostPaise = Number.isFinite(Number(item.unitDeliveryCostPaise))
+                            ? Number(item.unitDeliveryCostPaise)
+                            : Math.round(Number(stats.product.deliveryCostPerUnit || 0) * 100);
+                        const taxPercent = Number.isFinite(Number(item.taxPercent))
+                            ? Number(item.taxPercent)
+                            : Number(stats.product.taxPercent || 0);
+                        const taxPaise = Math.round(
+                            Number(item.unitPricePaise || 0) * quantity * taxPercent / 100
+                        );
+                        const expensesPaise = (unitCostPaise + deliveryCostPaise) * quantity + taxPaise;
+                        stats.confirmedSold += quantity;
+                        stats.confirmedRevenuePaise += lineRevenuePaise;
+                        stats.confirmedExpensesPaise += expensesPaise;
+                        stats.confirmedNetProfitPaise += lineRevenuePaise - expensesPaise;
                     }
                 }
             }
             if (order.returnStatus === 'accepted') {
+                for (const item of order.items || []) {
+                    const stats = productStats.get(String(item.productId));
+                    if (stats) stats.lifetimeReturnedCount += Number(item.quantity || 0);
+                }
                 addOrderItems(order, 'returnCount', order.returnedAt || order.returnRequestedAt || getDeliveredAt(order));
             }
         }
@@ -401,8 +456,11 @@ async function getInventorySales(req, res, next) {
                 purchaseCost: product.purchaseCost,
                 taxPercent: product.taxPercent,
                 deliveryCostPerUnit: product.deliveryCostPerUnit,
-                stock: product.stock,
-                soldCount: product.soldCount,
+                stock: Math.max(0, Number(product.stock || 0) - stats.reservedCount),
+                physicalStock: product.stock,
+                reservedCount: stats.reservedCount,
+                soldCount: stats.lifetimeSoldCount,
+                lifetimeSoldCount: stats.lifetimeSoldCount,
                 damagedCount: product.damagedCount,
                 supplierReturnCount: product.supplierReturnCount || 0,
                 viewCount: product.viewCount,
@@ -411,10 +469,13 @@ async function getInventorySales(req, res, next) {
                 imageUrls: product.imageUrls || [],
                 confirmedSold: stats.confirmedSold,
                 confirmedRevenuePaise: stats.confirmedRevenuePaise,
+                confirmedExpensesPaise: stats.confirmedExpensesPaise,
+                confirmedNetProfitPaise: stats.confirmedNetProfitPaise,
                 activeCount: stats.activeCount,
                 inProcessCount: stats.inProcessCount,
                 cancelledCount: stats.cancelledCount,
-                returnCount: stats.returnCount
+                returnCount: stats.returnCount,
+                lifetimeReturnedCount: stats.lifetimeReturnedCount
             }))
         });
     } catch (error) {

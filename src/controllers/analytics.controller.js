@@ -99,8 +99,26 @@ async function getAnalytics(req, res, next) {
 
         const salesByLocation = {};
         const salesByDay = {};
+        const profitByDayPaise = {};
         const productSales = {};
         const productProfit = {};
+        const productsById = new Map(products.map((product) => [String(product._id), product]));
+        const orderProductNames = new Map();
+        for (const order of allDashboardOrders) {
+            for (const item of order.items || []) {
+                const productId = String(item.productId);
+                if (!orderProductNames.has(productId)) {
+                    const savedName = [item.heading, item.title].find((value) => typeof value === 'string' && value.trim());
+                    if (savedName) orderProductNames.set(productId, savedName.trim());
+                }
+            }
+        }
+        const productName = (id) => (
+            productsById.get(id)?.heading ||
+            productsById.get(id)?.title ||
+            orderProductNames.get(id) ||
+            `Product ${id.slice(-6)}`
+        );
         const completedSalesOrders = allDashboardOrders.filter((order) => {
             if (order.status !== 'delivered' || order.returnStatus === 'accepted') return false;
             const deliveredAt = getDeliveredAt(order);
@@ -119,8 +137,9 @@ async function getAnalytics(req, res, next) {
             return deliveredAt && Date.now() - new Date(deliveredAt).getTime() < COMPLETION_WINDOW_MS;
         });
         const periodCompletedOrders = completedSalesOrders.filter((order) => {
-            const confirmedAt = getDeliveredAt(order);
-            return confirmedAt && new Date(confirmedAt).getTime() >= start.getTime();
+            const deliveredAt = getDeliveredAt(order);
+            const confirmedAt = deliveredAt ? new Date(deliveredAt).getTime() + COMPLETION_WINDOW_MS : NaN;
+            return Number.isFinite(confirmedAt) && confirmedAt >= start.getTime();
         });
         const periodActiveOrders = allDashboardOrders.filter((order) =>
             ['pending_payment', 'confirmed', 'processing', 'shipped'].includes(order.status) &&
@@ -152,16 +171,34 @@ async function getAnalytics(req, res, next) {
             const address = order.deliveryAddress || {};
             const location = [address.city, address.state].filter(Boolean).join(', ') || 'Unknown';
             salesByLocation[location] = (salesByLocation[location] || 0) + 1;
-            const confirmationDate = getDeliveredAt(order);
-            const day = confirmationDate ? new Date(confirmationDate).toISOString().slice(0, 10) : order.createdAt.toISOString().slice(0, 10);
-            salesByDay[day] = (salesByDay[day] || 0) + order.amountPaise / 100;
+            const deliveredAt = getDeliveredAt(order);
+            const confirmedAt = new Date(new Date(deliveredAt).getTime() + COMPLETION_WINDOW_MS);
+            const day = confirmedAt.toISOString().slice(0, 10);
+            salesByDay[day] = (salesByDay[day] || 0) + Number(order.amountPaise || 0) / 100;
             for (const item of order.items) {
                 const id = String(item.productId);
-                productSales[id] = (productSales[id] || 0) + item.quantity;
-                const product = products.find((entry) => String(entry._id) === id);
-                const unitCost = Number(product?.purchaseCost || product?.costPrice) || 0;
-                productProfit[id] = (productProfit[id] || 0) +
-                    (Number(item.unitPricePaise) / 100 - unitCost) * item.quantity;
+                const product = productsById.get(id);
+                const quantity = Number(item.quantity || 0);
+                const unitPricePaise = Number(item.unitPricePaise || 0);
+                const lineRevenuePaise = Number(item.lineTotalPaise || unitPricePaise * quantity);
+                const unitCostPaise = Number.isFinite(Number(item.unitPurchaseCostPaise))
+                    ? Number(item.unitPurchaseCostPaise)
+                    : Math.round(Number(product?.purchaseCost || product?.costPrice || 0) * 100);
+                const deliveryCostPaise = Number.isFinite(Number(item.unitDeliveryCostPaise))
+                    ? Number(item.unitDeliveryCostPaise)
+                    : Math.round(Number(product?.deliveryCostPerUnit || 0) * 100);
+                const taxPercent = Number.isFinite(Number(item.taxPercent))
+                    ? Number(item.taxPercent)
+                    : Number(product?.taxPercent || 0);
+                const taxPaise = Math.round(
+                    unitPricePaise * quantity * taxPercent / 100
+                );
+                const itemProfitPaise = lineRevenuePaise -
+                    (unitCostPaise + deliveryCostPaise) * quantity - taxPaise;
+
+                productSales[id] = (productSales[id] || 0) + quantity;
+                productProfit[id] = (productProfit[id] || 0) + itemProfitPaise / 100;
+                profitByDayPaise[day] = (profitByDayPaise[day] || 0) + itemProfitPaise;
             }
         }
 
@@ -176,7 +213,6 @@ async function getAnalytics(req, res, next) {
             }
         }
 
-        const productName = (id) => products.find((product) => String(product._id) === id)?.heading || 'Unknown product';
         const mostSold = Object.entries(productSales)
             .map(([id, quantity]) => ({ productId: id, name: productName(id), quantity }))
             .sort((a, b) => b.quantity - a.quantity).slice(0, 10);
@@ -201,7 +237,7 @@ async function getAnalytics(req, res, next) {
         for (const order of periodCompletedOrders) {
             const deliveredAt = getDeliveredAt(order);
             if (!deliveredAt) continue;
-            const date = new Date(deliveredAt).toISOString().slice(0, 10);
+            const date = new Date(new Date(deliveredAt).getTime() + COMPLETION_WINDOW_MS).toISOString().slice(0, 10);
             for (const item of order.items || []) {
                 const id = String(item.productId);
                 if (!dailyProductSales.has(id)) dailyProductSales.set(id, new Map());
@@ -319,6 +355,7 @@ async function getAnalytics(req, res, next) {
                 visits: events.filter((event) => event.type === 'visit').length,
                 deliveredOrders: periodCompletedOrders.length,
                 salesPaise: periodCompletedOrders.reduce((sum, order) => sum + order.amountPaise, 0),
+                netProfitPaise: Object.values(profitByDayPaise).reduce((sum, profit) => sum + profit, 0),
                 completedOrders: periodCompletedOrders.length,
                 activeOrders: periodActiveOrders.length,
                 activeOrderAmountPaise: periodActiveOrders.reduce((sum, order) => sum + Number(order.amountPaise || 0), 0),
@@ -345,6 +382,9 @@ async function getAnalytics(req, res, next) {
                 .sort((a, b) => a.hour - b.hour),
             salesByLocation: ranked(salesByLocation, 'location', 'orders'),
             salesByDay: Object.entries(salesByDay).map(([date, sales]) => ({ date, sales: Math.round(sales * 100) / 100 }))
+                .sort((a, b) => a.date.localeCompare(b.date)),
+            profitByDay: Object.entries(profitByDayPaise)
+                .map(([date, profitPaise]) => ({ date, profit: Math.round(profitPaise) / 100 }))
                 .sort((a, b) => a.date.localeCompare(b.date)),
             keywords: ranked(keywordCounts, 'keyword', 'searches'),
             pagePerformance,

@@ -15,6 +15,7 @@ const {
 
 const MAX_CART_QUANTITY = 25;
 const ORDER_CANCELLATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+const PAYMENT_RESERVATION_WINDOW_MS = 30 * 60 * 1000;
 const PURCHASED_ORDER_STATUSES = ['delivered'];
 
 function getRazorpayCredentials() {
@@ -149,16 +150,51 @@ async function loadOrderContext(req, res) {
         quantities.set(productId, (quantities.get(productId) || 0) + quantity);
     }
 
-    const products = await ProductModel.find({ _id: { $in: Array.from(quantities.keys()) } });
+    const productIds = Array.from(quantities.keys()).map((productId) => new mongoose.Types.ObjectId(productId));
+    const pendingPaymentCutoff = new Date(Date.now() - PAYMENT_RESERVATION_WINDOW_MS);
+    const [products, activeOrders, pendingPaymentOrders] = await Promise.all([
+        ProductModel.find({ _id: { $in: productIds } }),
+        OrderModel.find({
+            status: { $in: ['confirmed', 'processing', 'shipped'] },
+            'items.productId': { $in: productIds }
+        }).select('items').lean(),
+        OrderModel.find({
+            status: 'pending_payment',
+            createdAt: { $gte: pendingPaymentCutoff },
+            'items.productId': { $in: productIds }
+        }).select('items').lean()
+    ]);
     if (products.length !== quantities.size) {
         res.status(400).json({ message: 'One or more products in your cart are no longer available.' });
         return null;
+    }
+
+    const reservedQuantities = new Map();
+    for (const order of [...activeOrders, ...pendingPaymentOrders]) {
+        for (const item of order.items || []) {
+            const productId = String(item.productId);
+            reservedQuantities.set(
+                productId,
+                (reservedQuantities.get(productId) || 0) + Number(item.quantity || 0)
+            );
+        }
     }
 
     const productsById = new Map(products.map((product) => [String(product._id), product]));
     const items = [];
     for (const [productId, quantity] of quantities) {
         const product = productsById.get(productId);
+        const availableStock = Math.max(
+            0,
+            Number(product.stock || 0) - Number(reservedQuantities.get(productId) || 0)
+        );
+        if (quantity > availableStock) {
+            res.status(409).json({
+                code: 'OUT_OF_STOCK',
+                message: `${product.heading} has only ${availableStock} item${availableStock === 1 ? '' : 's'} available.`
+            });
+            return null;
+        }
         const title = [product.title, product.heading].find((value) => typeof value === 'string' && value.trim());
         const heading = [product.heading, product.title].find((value) => typeof value === 'string' && value.trim());
         const price = Number(product.price);
@@ -179,6 +215,9 @@ async function loadOrderContext(req, res) {
             url: product.url || '',
             uri: product.uri || '',
             unitPricePaise,
+            unitPurchaseCostPaise: Math.round(Number(product.purchaseCost || product.costPrice || 0) * 100),
+            unitDeliveryCostPaise: Math.round(Number(product.deliveryCostPerUnit || 0) * 100),
+            taxPercent: Number(product.taxPercent || 0),
             quantity,
             lineTotalPaise
         });

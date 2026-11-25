@@ -7,6 +7,9 @@ const orderItemSchema = new mongoose.Schema({
     url: { type: String, default: '' },
     uri: { type: String, default: '' },
     unitPricePaise: { type: Number, required: true, min: 0 },
+    unitPurchaseCostPaise: { type: Number, min: 0 },
+    unitDeliveryCostPaise: { type: Number, min: 0 },
+    taxPercent: { type: Number, min: 0, max: 100 },
     quantity: { type: Number, required: true, min: 1, max: 25 },
     lineTotalPaise: { type: Number, required: true, min: 0 }
 }, { _id: false });
